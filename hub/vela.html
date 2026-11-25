@@ -49,17 +49,28 @@ const provider = {
       to = out[0].time - 1;
     }
     if (range.from) out = out.filter((b) => b.time >= range.from);
-    if (!range.to) { lastBars = out; setTimeout(applyTheme, 400); }  // the volume indicator mounts with the data: colour it then
+    if (!range.to) {
+      lastBars = out;
+      setTimeout(applyTheme, 400);
+      if (LabEmbedded && out.length) {
+        const b = out[out.length - 1];
+        window.parent.postMessage({ evt: "tick", symbol: ticker, price: b.close, time: b.time }, location.origin);
+      }
+    }
     return out;
   },
   subscribe(ticker, timeframe, onBar) {
     const tf = LabTF.fromAny(timeframe), step = LabTF.sec[tf] * 1000;
-    let chain = Promise.resolve();
+    let chain = Promise.resolve(), lastTickPost = 0;
     const push = (bar) => {
       const last = lastBars[lastBars.length - 1];
       if (last && bar.time < last.time) return;
       if (last && last.time === bar.time) lastBars[lastBars.length - 1] = bar; else lastBars.push(bar);
       onBar(bar);
+      if (LabEmbedded && Date.now() - lastTickPost > 200) {
+        lastTickPost = Date.now();
+        window.parent.postMessage({ evt: "tick", symbol: ticker, price: bar.close, time: bar.time }, location.origin);
+      }
     };
     return LabFeed.live(ticker, tf, (b) => {
       const bar = { ...b, time: b.time * 1000 };
@@ -86,7 +97,15 @@ let ws;
 class HubPineEngine extends VelaLab.PineWorkerEngine {
   execute(req, handlers) {
     const h = Object.create(handlers);
-    h.onModel = (model) => { if (!HubSettingsLoad().indicatorBars && model && model.barColors) model = { ...model, barColors: undefined }; handlers.onModel(model); };
+    h.onModel = (model) => {
+      if (!HubSettingsLoad().indicatorBars && model && model.barColors) model = { ...model, barColors: undefined };
+      if (LabEmbedded && model && Array.isArray(model.trades) && model.trades.length) {
+        const title = (req && req.prepared && req.prepared.meta && req.prepared.meta.title) || (model.meta && model.meta.title) || "Strategy";
+        const sym = String((req && req.market && req.market.symbol) || window.LabDefaultSymbol || "").replace(/^lab:/, "");
+        window.parent.postMessage({ evt: "strategy:report", title, symbol: sym, tf: window.LabDefaultTF, trades: model.trades }, location.origin);
+      }
+      handlers.onModel(model);
+    };
     return super.execute(req, h);
   }
 }
