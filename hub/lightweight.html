@@ -9,6 +9,10 @@
   #bar label{display:flex;gap:4px;align-items:center}
   #chart{position:absolute;left:0;right:0;bottom:0}
   #title{font-weight:600;margin-right:8px}
+  #pineLegend{position:absolute;top:8px;left:10px;z-index:15;display:flex;flex-wrap:wrap;gap:6px;pointer-events:none}
+  .pine-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;background:rgba(15,22,29,.82);color:#d6dee5;border:1px solid #2b3946;border-radius:4px;padding:2px 7px;font-size:12px}
+  .pine-pill button{background:none;border:0;color:#93a2af;cursor:pointer;padding:0 2px;font-size:12px;line-height:1}
+  .pine-pill button:hover{color:#5fb3e0}
 </style></head><body>
 <div id="bar">
   <span id="title">Lightweight Charts 5.2.1</span>
@@ -26,14 +30,16 @@
   <button id="auto">Code trendline</button><button id="clear">Clear drawings</button>
 </div>
 <div id="chart"></div>
+<div id="pineLegend"></div>
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="vendor/lightweight-charts-drawing.umd.js"></script>
+<script src="vela.bundle.js"></script>
 <script src="theme.js"></script>
 <script src="lab.js"></script>
 <script>
 const LC = LightweightCharts, LD = LightweightChartsDrawing;
 const host = document.getElementById("chart");
-const placeChart = () => { host.style.top = document.getElementById("bar").offsetHeight + "px"; };
+const placeChart = () => { const top = document.getElementById("bar").offsetHeight; host.style.top = top + "px"; const leg = document.getElementById("pineLegend"); if (leg) leg.style.top = (top + 8) + "px"; };
 placeChart(); window.addEventListener("resize", placeChart);
 
 const chart = LC.createChart(host, {
@@ -45,7 +51,12 @@ const chart = LC.createChart(host, {
   crosshair: { mode: LC.CrosshairMode.Normal },
 });
 
-let sym = LabDefaultSymbol, tf = LabDefaultTF, style = "candles", bars = [], stop = null, loadingOlder = false;
+let lwPrefs = { style: "candles", ema: true, vol: true, rsi: true };
+try { Object.assign(lwPrefs, JSON.parse(localStorage.getItem("lwPrefs") || "{}")); } catch (_) {}
+const saveLwPrefs = () => { try { localStorage.setItem("lwPrefs", JSON.stringify(lwPrefs)); } catch (_) {} };
+let sym = LabDefaultSymbol, tf = LabDefaultTF, style = lwPrefs.style, bars = [], stop = null, loadingOlder = false;
+document.getElementById("style").value = style;
+["ema", "vol", "rsi"].forEach((id) => { document.getElementById(id).checked = lwPrefs[id] !== false; });
 let price, volS, rsiS, emaS = [], drawings;
 
 function makePrice() {
@@ -111,6 +122,7 @@ async function load() {
   if (my !== loadGen) return;         // user switched again while loading: drop stale data
   bars = fresh;
   paintAll();
+  notifyPineBars();
   drawings.clear();
   let lastRepaint = 0;
   stop = LabFeed.live(sym, tf, (b) => {
@@ -121,7 +133,7 @@ async function load() {
     if (isNew) bars.push(b); else bars[bars.length - 1] = b;
     price.update(priceData(b));
     if (volS) volS.update({ time: b.time, value: b.volume, color: b.close >= b.open ? HubTheme.upVol : HubTheme.downVol });
-    if (isNew || Date.now() - lastRepaint > 2000) { lastRepaint = Date.now(); if (isNew) paintAll(); }
+    if (isNew || Date.now() - lastRepaint > 2000) { lastRepaint = Date.now(); if (isNew) paintAll(); notifyPineBars(); }
   }, srcOf(sym));
 }
 
@@ -131,7 +143,7 @@ chart.timeScale().subscribeVisibleLogicalRangeChange(async (r) => {
   try {
     const older = await LabFeed.history(sym, tf, bars[0].time * 1000 - 1, 1000, srcOf(sym));
     const fresh = older.filter((b) => b.time < bars[0].time);
-    if (fresh.length) { bars = fresh.concat(bars); paintAll(); }
+    if (fresh.length) { bars = fresh.concat(bars); paintAll(); notifyPineBars(); }
   } finally { loadingOlder = false; }
 });
 
@@ -150,8 +162,8 @@ symSel.onchange = (e) => { sym = e.target.value; LabNotify(sym, tf); load(); };
 const tfBox = document.getElementById("tfs");
 LabTF.list.forEach((t) => { const b = document.createElement("button"); b.textContent = t; b.dataset.tf = t; b.onclick = () => { tf = t; markTF(); LabNotify(sym, tf); load(); }; tfBox.appendChild(b); });
 function markTF() { tfBox.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.tf === tf)); }
-document.getElementById("style").onchange = (e) => { style = e.target.value; makePrice(); paintAll(); };
-["ema", "vol", "rsi"].forEach((id) => (document.getElementById(id).onchange = paintAll));
+document.getElementById("style").onchange = (e) => { style = e.target.value; lwPrefs.style = style; saveLwPrefs(); makePrice(); paintAll(); };
+["ema", "vol", "rsi"].forEach((id) => (document.getElementById(id).onchange = (e) => { lwPrefs[id] = e.target.checked; saveLwPrefs(); paintAll(); }));
 
 const all = document.getElementById("alltools");
 Object.keys(LD.OVERLAY_SPECS).sort().forEach((k) => all.add(new Option(k.replace(/-/g, " "), k)));
@@ -177,7 +189,161 @@ function applyTheme() {
     grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } }, rightPriceScale: { borderColor: t.line }, timeScale: { borderColor: t.line } });
   makePrice(); paintAll();
 }
-window.labChart = { name: "lightweight", applyTheme, setMarket: (s, t) => { sym = s; tf = t || tf; if (![...symSel.options].some((o) => o.value === s)) symSel.add(new Option(s, s)); symSel.value = s; markTF(); return load(); }, setTF: (t) => { tf = t; markTF(); return load(); }, addCodeTrendline, drawingCount: () => drawings.drawings().length, barCount: () => bars.length };
+const pineEngine = new VelaLab.PineWorkerEngine();
+const pineHandles = new Map();
+let pineSeq = 0;
+
+function pineBars() {
+  return bars.map((b) => ({ time: b.time * 1000, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+}
+function notifyPineBars() {
+  for (const h of pineHandles.values()) {
+    try { if (h.session && h.session.notifyBars) h.session.notifyBars("complete"); } catch (_) {}
+  }
+}
+function clearPineSeries(h) {
+  h.series.forEach((s) => { try { chart.removeSeries(s); } catch (_) {} });
+  h.series = [];
+}
+function toRgba(col, alpha) {
+  if (/^#[0-9a-f]{6}$/i.test(col)) {
+    const n = parseInt(col.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+  }
+  return col;
+}
+function pineSeriesData(points, withBreaks) {
+  const byTime = new Map();
+  for (const p of points) {
+    if (!p || p.time == null) continue;
+    const t = Math.floor(p.time / 1000);
+    const valid = p.value != null && Number.isFinite(p.value);
+    if (valid) byTime.set(t, { time: t, value: p.value });
+    else if (withBreaks && !byTime.has(t)) byTime.set(t, { time: t });
+  }
+  return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+}
+function renderPineModel(h, model) {
+  h.model = model;
+  clearPineSeries(h);
+  const list = (model && model.series) ? model.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
+  const overlay = !!(model && model.overlay);
+  const palette = HubTheme.lines || ["#5fb3e0", "#f5a623", "#a78bfa", "#34d399", "#f87171"];
+  const paneIdx = overlay ? 0 : (chart.panes ? chart.panes().length : 1);
+  const stOpt = h.style || {};
+  const ls = stOpt.lineStyle || "default";
+  const withBreaks = ls === "line_breaks" || ls === "stepline_breaks";
+  list.forEach((s, idx) => {
+    const col = stOpt.color || s.color || palette[idx % palette.length];
+    const lw = stOpt.lineWidth || s.lineWidth || 1.5;
+    const pIdx = idx === 0 ? paneIdx : (overlay ? 0 : (chart.panes ? chart.panes().length - 1 : paneIdx));
+    let ser;
+    if (ls === "histogram" || ls === "columns" || (ls === "default" && (s.type === "histogram" || s.type === "columns"))) {
+      ser = chart.addSeries(LC.HistogramSeries, { color: col, priceLineVisible: false }, pIdx);
+    } else if (ls === "area") {
+      ser = chart.addSeries(LC.AreaSeries, { lineColor: col, lineWidth: lw, topColor: toRgba(col, 0.27), bottomColor: toRgba(col, 0), priceLineVisible: false }, pIdx);
+    } else {
+      const opts = { color: col, lineWidth: lw, priceLineVisible: false, lastValueVisible: true };
+      if (ls === "stepline" || ls === "stepline_breaks" || ls === "stepline_diamond") opts.lineType = LC.LineType ? LC.LineType.WithSteps : 1;
+      if (ls === "stepline_diamond") { opts.pointMarkersVisible = true; opts.pointMarkersRadius = Math.max(3, lw + 1); }
+      if (ls === "circles") { opts.lineVisible = false; opts.pointMarkersVisible = true; opts.pointMarkersRadius = Math.max(3, lw + 1); }
+      ser = chart.addSeries(LC.LineSeries, opts, pIdx);
+    }
+    ser.setData(pineSeriesData(s.points, withBreaks));
+    h.series.push(ser);
+  });
+}
+
+function renderPineLegend() {
+  const box = document.getElementById("pineLegend");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const h of pineHandles.values()) {
+    const p = document.createElement("div"); p.className = "pine-pill";
+    const nm = document.createElement("span"); nm.textContent = h.title || "Pine";
+    const gear = document.createElement("button"); gear.title = "Indicator settings & style"; gear.textContent = "\u2699";
+    gear.onclick = () => { if (LabEmbedded) window.parent.postMessage({ evt: "indicators:open", tab: "chart", id: h.id }, location.origin); };
+    const rm = document.createElement("button"); rm.title = "Remove indicator"; rm.textContent = "\u00d7";
+    rm.onclick = () => { window.labChart.removePine(h.id); if (LabEmbedded) window.parent.postMessage({ evt: "ind:removed", id: h.id }, location.origin); };
+    p.append(nm, gear, rm); box.appendChild(p);
+  }
+}
+
+window.labChart = {
+  name: "lightweight",
+  applyTheme,
+  setMarket: (s, t) => { sym = s; tf = t || tf; if (![...symSel.options].some((o) => o.value === s)) symSel.add(new Option(s, s)); symSel.value = s; markTF(); return load(); },
+  setTF: (t) => { tf = t; markTF(); return load(); },
+  addCodeTrendline,
+  onChart: () => Array.from(pineHandles.values()).map((h) => ({ id: h.id, title: h.title, native: null, visible: true })),
+  stylePine: (id, styleOpt) => {
+    const h = pineHandles.get(id);
+    if (!h) return false;
+    h.style = styleOpt || {};
+    if (h.model) renderPineModel(h, h.model);
+    return true;
+  },
+  updatePine: (id, inputs) => {
+    const h = pineHandles.get(id);
+    if (!h || !h.session || !h.session.update) return false;
+    h.session.update(inputs || {});
+    return true;
+  },
+  removePine: (id) => {
+    const h = pineHandles.get(id);
+    if (!h) return false;
+    try { if (h.session && h.session.stop) h.session.stop(); } catch (_) {}
+    clearPineSeries(h);
+    pineHandles.delete(id);
+    renderPineLegend();
+    return true;
+  },
+  addPine: async (source, inputs, props, styleOpt) => {
+    const id = "pine_" + (++pineSeq);
+    try {
+      const prepared = await pineEngine.prepare(source);
+      const title = (prepared && prepared.meta && prepared.meta.title) || "Pine";
+      const inputDefs = (prepared && prepared.inputs) || [];
+      const h = { id, title, session: null, series: [], style: styleOpt || {}, model: null };
+      pineHandles.set(id, h);
+      renderPineLegend();
+      return await new Promise((done) => {
+        let settled = false;
+        const t = setTimeout(() => {
+          if (!settled) { settled = true; done({ ok: true, id, pending: true, title, inputs: inputDefs, note: "no result within 15 s (no chart data yet?)" }); }
+        }, 15000);
+        h.session = pineEngine.execute({
+          prepared,
+          market: { symbol: sym, timeframe: LabTF.toPine(tf) },
+          bars: pineBars(),
+          getBars: pineBars,
+          fetchSeries: (s, tfArg, range) => LabPineSeries(sym, s, tfArg, range),
+          inputs: inputs || {},
+          props: props || {},
+          mode: "live",
+          historyState: bars.length ? "complete" : "backfill",
+        }, {
+          onModel: (model) => {
+            renderPineModel(h, model);
+            if (!settled) { settled = true; clearTimeout(t); done({ ok: true, id, title, inputs: inputDefs }); }
+            else if (LabEmbedded) window.parent.postMessage({ evt: "ind:ready", id }, location.origin);
+          },
+          onError: (err) => {
+            if (!settled) {
+              settled = true; clearTimeout(t); clearPineSeries(h); pineHandles.delete(id); renderPineLegend();
+              done({ ok: false, id, error: String((err && err.message) || err) });
+            }
+          },
+        });
+      });
+    } catch (e) {
+      pineHandles.delete(id); renderPineLegend();
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  },
+  drawingCount: () => drawings.drawings().length,
+  barCount: () => bars.length,
+};
 makePrice(); markTF(); load();
 </script>
 </body></html>

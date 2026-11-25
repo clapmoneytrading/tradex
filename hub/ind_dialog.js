@@ -8,7 +8,9 @@ const SECTIONS = [
 let dlg = { sec: "vela", chip: "1", q: "", search: null, rowMsg: {} };
 const CAT = {};  // loaded lists, by "sec:chip"
 
-function openIndDlg() {
+function openIndDlg(sec, openId) {
+  if (sec) { dlg.sec = sec; dlg.search = null; dlg.q = ""; }
+  dlg.openId = openId || null;
   let d = $("indDlg");
   if (!d) {
     d = document.createElement("div"); d.id = "indDlg"; d.hidden = true;
@@ -103,11 +105,12 @@ async function addRow(r) {
   }
   const stamp = Date.now().toString(36);
   let ind;
-  if (r.src === "vela") ind = { key: `native:${r.type}:${stamp}`, kind: "native", type: r.type, name: r.name, origin: "Vela", on: true };
-  else if (r.src === "mine") { const m = MINE.find((x) => x.id === r.mineId); if (!m) return; ind = { key: `own:${m.id}:${stamp}`, mineId: m.id, name: m.name, origin: "own", source: m.source, on: true }; }
+  const curPane = typeof activePane === "number" ? activePane : 0;
+  if (r.src === "vela") ind = { key: `native:${r.type}:${stamp}`, kind: "native", type: r.type, name: r.name, origin: "Vela", pane: curPane, on: true };
+  else if (r.src === "mine") { const m = MINE.find((x) => x.id === r.mineId); if (!m) return; ind = { key: `own:${m.id}:${stamp}`, mineId: m.id, name: m.name, origin: "own", source: m.source, pane: curPane, on: true }; }
   else return flash("This script is not available here.", true);
   ind.rowId = r.id; INDS.push(ind); saveInds(); flash("Adding to the chart...");
-  if (st.engine !== "vela") flash("Pine draws on the Vela engine: switching to Vela...");
+  if (!["vela", "klinechart", "lightweight"].includes(st.engine)) flash("Pine draws on Vela, KLineChart, or Lightweight: switching to Vela...");
   pineAdd(ind);  // on another engine this switches to Vela, which then draws every indicator that is on
 }
 // Results land here (via indChanged) and show on the row that added them.
@@ -128,11 +131,90 @@ function renderOnChart(L) {
     row.innerHTML = `<input type="checkbox" ${ind.on ? "checked" : ""} title="Show on chart">
       <div class="nm">${esc(ind.name)}</div><div class="sub">${esc(ind.origin)}${conv} · ${esc(status)}${ind.license ? " · " + esc(ind.license) : ""}</div>
       ${ind.err ? `<div class="msg bad">${esc(ind.err)}</div>` : ""}${ind.notes && ind.notes.length ? `<div class="msg">Converter: ${esc(ind.notes.join("; "))}</div>` : ""}
-      <div class="acts">${ind.source ? '<button class="btn" data-a="edit">Edit a copy</button>' : ""}<button class="btn" data-a="rm">Remove</button></div>`;
+      <div class="acts">${ind.source ? '<button class="btn" data-a="style">Settings</button><button class="btn" data-a="edit">Edit a copy</button>' : ""}<button class="btn" data-a="rm">Remove</button></div>`;
     row.querySelector("input").onclick = (e) => { e.stopPropagation(); toggleInd(ind, e.target.checked); };
     row.querySelector('[data-a="rm"]').onclick = (e) => { e.stopPropagation(); removeInd(ind); };
     const ed = row.querySelector('[data-a="edit"]'); if (ed) ed.onclick = (e) => { e.stopPropagation(); closeIndDlg(); editorOpenSource(ind.name + " (copy)", ind.source); };
+    const sb = row.querySelector('[data-a="style"]');
+    const toggleBox = () => {
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains("style-box")) { next.remove(); return; }
+      const box = document.createElement("div"); box.className = "style-box";
+      box.style.cssText = "margin:4px 10px 8px 34px;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:5px;display:flex;flex-direction:column;gap:8px;font-size:12px";
+      const cur = ind.style || {};
+      const row1 = document.createElement("div"); row1.style.cssText = "display:flex;flex-wrap:wrap;gap:10px;align-items:center";
+      row1.innerHTML = `<label>Style <select data-f="ls">
+        <option value="default">Default (from script)</option>
+        <option value="line">Line</option>
+        <option value="line_breaks">Line with breaks</option>
+        <option value="stepline">Step line</option>
+        <option value="stepline_breaks">Step line with breaks</option>
+        <option value="stepline_diamond">Step line with diamonds</option>
+        <option value="circles">Circles</option>
+        <option value="histogram">Histogram</option>
+        <option value="area">Area</option>
+      </select></label>
+      <label>Colour <input type="color" data-f="col" value="${esc(cur.color || "#5fb3e0")}"></label>
+      <label><input type="checkbox" data-f="useCol" ${cur.color ? "checked" : ""}> Custom colour</label>
+      <label>Thickness <select data-f="lw"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>`;
+      row1.querySelector('[data-f="ls"]').value = cur.lineStyle || "default";
+      row1.querySelector('[data-f="lw"]').value = String(cur.lineWidth || 2);
+      const applyStyleNow = () => {
+        const useCol = row1.querySelector('[data-f="useCol"]').checked;
+        setIndStyle(ind, {
+          lineStyle: row1.querySelector('[data-f="ls"]').value,
+          color: useCol ? row1.querySelector('[data-f="col"]').value : "",
+          lineWidth: Number(row1.querySelector('[data-f="lw"]').value) || 2,
+        });
+      };
+      row1.querySelector('[data-f="ls"]').onchange = applyStyleNow;
+      row1.querySelector('[data-f="lw"]').onchange = applyStyleNow;
+      row1.querySelector('[data-f="useCol"]').onchange = applyStyleNow;
+      const onCol = () => {
+        row1.querySelector('[data-f="useCol"]').checked = true;
+        applyStyleNow();
+      };
+      row1.querySelector('[data-f="col"]').oninput = onCol;
+      row1.querySelector('[data-f="col"]').onchange = onCol;
+      box.appendChild(row1);
+      const defs = (ind.inputDefs || []).filter((d) => !String(d.id || "").startsWith("__hubS"));
+      const inpVals = { ...(ind.inputs || {}) };
+      if (defs.length) {
+        const row2 = document.createElement("div"); row2.style.cssText = "display:flex;flex-wrap:wrap;gap:10px;align-items:center;border-top:1px solid var(--grid);padding-top:6px";
+        defs.forEach((d) => {
+          const id = d.id, val = id in inpVals ? inpVals[id] : d.defval;
+          const lbl = document.createElement("label"); lbl.textContent = (d.title || id) + " ";
+          let el;
+          if (d.type === "bool") { el = document.createElement("input"); el.type = "checkbox"; el.checked = !!val; el.onchange = () => { inpVals[id] = el.checked; }; }
+          else if (d.type === "color") {
+            el = document.createElement("input"); el.type = "color";
+            const s = String(val || "#5fb3e0");
+            el.value = /^#[0-9a-f]{6}/i.test(s) ? s.slice(0, 7) : "#5fb3e0";
+            el.oninput = el.onchange = () => { inpVals[id] = el.value; };
+          }
+          else if (Array.isArray(d.options) && d.options.length) { el = document.createElement("select"); d.options.forEach((o) => el.add(new Option(String(o), String(o)))); el.value = String(val); el.onchange = () => { inpVals[id] = el.value; }; }
+          else if (d.type === "int" || d.type === "float") { el = document.createElement("input"); el.type = "number"; el.style.width = "64px"; if (d.minval != null) el.min = d.minval; if (d.maxval != null) el.max = d.maxval; el.step = d.type === "float" ? "any" : "1"; el.value = val != null ? val : ""; el.oninput = () => { inpVals[id] = d.type === "int" ? parseInt(el.value, 10) : parseFloat(el.value); }; }
+          else { el = document.createElement("input"); el.type = "text"; el.style.width = "90px"; el.value = val != null ? String(val) : ""; el.oninput = () => { inpVals[id] = el.value; }; }
+          lbl.appendChild(el); row2.appendChild(lbl);
+        });
+        box.appendChild(row2);
+      }
+      const applyBtn = document.createElement("button"); applyBtn.className = "btn"; applyBtn.textContent = "Apply"; applyBtn.style.alignSelf = "flex-start";
+      applyBtn.onclick = () => {
+        const useCol = row1.querySelector('[data-f="useCol"]').checked;
+        setIndStyle(ind, {
+          lineStyle: row1.querySelector('[data-f="ls"]').value,
+          color: useCol ? row1.querySelector('[data-f="col"]').value : "",
+          lineWidth: Number(row1.querySelector('[data-f="lw"]').value) || 2,
+        });
+        if (defs.length) setIndInputs(ind, inpVals);
+      };
+      box.appendChild(applyBtn);
+      row.after(box);
+    };
+    if (sb) sb.onclick = (e) => { e.stopPropagation(); toggleBox(); };
     L.appendChild(row);
+    if (dlg.openId && liveIds[ind.key] === dlg.openId && sb) { dlg.openId = null; toggleBox(); }
   });
   L.insertAdjacentHTML("beforeend", '<div class="dlg-empty">Settings (inputs, colours, visibility): click the indicator name on the chart legend, then the gear.</div>');
 }

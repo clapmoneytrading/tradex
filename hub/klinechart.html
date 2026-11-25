@@ -19,6 +19,7 @@
 <div id="chart"></div>
 <script src="vendor/klinecharts.min.js"></script>
 <script src="vendor/klinecharts-pro.umd.js"></script>
+<script src="vela.bundle.js"></script>
 <script src="theme.js"></script>
 <script src="lab.js"></script>
 <script>
@@ -27,7 +28,7 @@ const SYMBOLS = LabSymbols.map((s) => ({ ticker: s.ticker, name: s.name, shortNa
 const PERIODS = [
   { multiplier: 1, timespan: "minute", text: "1m" }, { multiplier: 5, timespan: "minute", text: "5m" },
   { multiplier: 15, timespan: "minute", text: "15m" }, { multiplier: 30, timespan: "minute", text: "30m" },
-  { multiplier: 1, timespan: "hour", text: "1H" }, { multiplier: 4, timespan: "hour", text: "4H" },
+  { multiplier: 1, timespan: "hour", text: "1H" }, { multiplier: 2, timespan: "hour", text: "2H" }, { multiplier: 4, timespan: "hour", text: "4H" },
   { multiplier: 1, timespan: "day", text: "D" },
 ];
 const tfOf = (p) => LabTF.fromAny(p.multiplier + ({ minute: "m", hour: "h", day: "d" }[p.timespan] || "m"));
@@ -41,13 +42,20 @@ const datafeed = {
     // No lower cut at "from": KLineChart asks for the last 500 periods, which is empty on a closed market (weekend), and it
     // pages back from the oldest candle it gets, so older candles are fine (2026-11-15, Deriv gold showed a blank chart).
     const out = bars.filter((b) => b.time * 1000 <= to).map(toK);
-    if (symbol.ticker !== lastTicker || !lastBars.length || out.length && out[out.length - 1].timestamp >= lastBars[lastBars.length - 1].timestamp) { lastBars = out; lastTicker = symbol.ticker; }
+    if (symbol.ticker !== lastTicker || !lastBars.length || out.length && out[out.length - 1].timestamp >= lastBars[lastBars.length - 1].timestamp) { lastBars = out; lastTicker = symbol.ticker; notifyPineBars(); }
     return out;
   },
   subscribe(symbol, period, cb) {
     if (stop) stop();
     LabNotify(symbol.ticker, tfOf(period));
-    stop = LabFeed.live(symbol.ticker, tfOf(period), (b) => cb(toK(b)));
+    stop = LabFeed.live(symbol.ticker, tfOf(period), (b) => {
+      const k = toK(b);
+      const last = lastBars[lastBars.length - 1];
+      if (last && k.timestamp === last.timestamp) lastBars[lastBars.length - 1] = k;
+      else if (!last || k.timestamp > last.timestamp) lastBars.push(k);
+      notifyPineBars();
+      cb(k);
+    });
   },
   unsubscribe() { if (stop) { stop(); stop = null; } },
 };
@@ -99,12 +107,188 @@ function addCodeTrendline() {
   return api.createOverlay({ name: "straightLine", points: [{ timestamp: a.timestamp, value: a.low }, { timestamp: c.timestamp, value: c.low }] });
 }
 document.getElementById("auto").onclick = addCodeTrendline;
+const pineEngine = new VelaLab.PineWorkerEngine();
+const pineHandles = new Map();
+let pineSeq = 0;
+
+function pineBars() {
+  return lastBars.map((b) => ({ time: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+}
+function notifyPineBars() {
+  for (const h of pineHandles.values()) {
+    try { if (h.session && h.session.notifyBars) h.session.notifyBars("complete"); } catch (_) {}
+  }
+}
+function renderPineModel(h, model) {
+  h.model = model;
+  const api = pro._chartApi;
+  if (!api || typeof klinecharts === "undefined") return;
+  const series = (model && model.series) ? model.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
+  const maps = series.map((s) => { const m = new Map(); for (const p of s.points) m.set(p.time, p.value); return m; });
+  const overlay = !!(model && model.overlay);
+  const title = (model && (model.shorttitle || model.title)) || h.title || "Pine";
+  const palette = HubTheme.lines || ["#5fb3e0", "#f5a623", "#a78bfa", "#34d399", "#f87171"];
+  const stOpt = h.style || {};
+  const ls = stOpt.lineStyle || "default";
+  const customDraw = ["line_breaks", "stepline", "stepline_breaks", "stepline_diamond", "circles"].includes(ls);
+  const figures = series.length
+    ? series.map((s, idx) => ({
+        key: "p" + idx,
+        title: (s.title || ("P" + idx)) + ": ",
+        type: (ls === "histogram" || ls === "columns" || (ls === "default" && (s.type === "histogram" || s.type === "columns"))) ? "bar" : "line",
+        styles: () => ({ color: stOpt.color || s.color || palette[idx % palette.length], size: stOpt.lineWidth || s.lineWidth || 1.5 }),
+      }))
+    : [{ key: "p0", title: "", type: "line" }];
+  const reg = {
+    name: h.indName,
+    shortName: title,
+    series: overlay ? "price" : "normal",
+    figures,
+    calc: (kLineDataList) => kLineDataList.map((d) => {
+      const row = {};
+      maps.forEach((m, idx) => { const v = m.get(d.timestamp); if (v != null && Number.isFinite(v)) row["p" + idx] = v; });
+      return row;
+    }),
+  };
+  if (customDraw && series.length) {
+    reg.draw = ({ ctx, chart, indicator, xAxis, yAxis }) => {
+      const dataList = chart.getDataList();
+      const range = chart.getVisibleRange();
+      const result = indicator.result || [];
+      const lw = stOpt.lineWidth || 1.5;
+      series.forEach((s, idx) => {
+        const col = stOpt.color || s.color || palette[idx % palette.length];
+        const key = "p" + idx;
+        ctx.save();
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw;
+        if (ls === "line_breaks") {
+          ctx.beginPath();
+          let started = false;
+          for (let i = range.from; i <= range.to && i < dataList.length; i++) {
+            const v = result[i] && result[i][key];
+            if (v == null || !Number.isFinite(v)) { started = false; continue; }
+            const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
+            if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+        if (ls === "stepline" || ls === "stepline_breaks" || ls === "stepline_diamond") {
+          ctx.beginPath();
+          let started = false, prevY = null;
+          for (let i = range.from; i <= range.to && i < dataList.length; i++) {
+            const v = result[i] && result[i][key];
+            if (v == null || !Number.isFinite(v)) { started = false; continue; }
+            const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
+            if (!started) { ctx.moveTo(x, y); started = true; }
+            else { ctx.lineTo(x, prevY); ctx.lineTo(x, y); }
+            prevY = y;
+          }
+          ctx.stroke();
+        }
+        if (ls === "stepline_diamond" || ls === "circles") {
+          const r = Math.max(3, lw + 1.5);
+          for (let i = range.from; i <= range.to && i < dataList.length; i++) {
+            const v = result[i] && result[i][key];
+            if (v == null || !Number.isFinite(v)) continue;
+            const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
+            ctx.beginPath();
+            if (ls === "stepline_diamond") {
+              ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+            } else {
+              ctx.arc(x, y, r - 0.5, 0, Math.PI * 2);
+            }
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      });
+      return true;
+    };
+  }
+  klinecharts.registerIndicator(reg);
+  if (!h.mounted || h.overlay !== overlay) {
+    if (h.mounted && h.paneId) { try { api.removeIndicator(h.paneId, h.indName); } catch (_) {} }
+    h.overlay = overlay;
+    h.paneId = api.createIndicator(h.indName, overlay, overlay ? { id: "candle_pane" } : undefined);
+    h.mounted = true;
+  } else {
+    api.overrideIndicator({ name: h.indName, shortName: title }, h.paneId);
+  }
+}
+
 window.labChart = {
   name: "klinechart-pro",
   applyTheme,
   setMarket: (s, t) => { const x = SYMBOLS.find((y) => y.ticker === s); if (x) pro.setSymbol(x); if (t) pro.setPeriod(PERIODS[LabTF.list.indexOf(t)] || PERIODS[0]); },
   setTF: (t) => pro.setPeriod(PERIODS[LabTF.list.indexOf(t)]),
   addCodeTrendline,
+  onChart: () => Array.from(pineHandles.values()).map((h) => ({ id: h.id, title: h.title, native: null, visible: true })),
+  stylePine: (id, styleOpt) => {
+    const h = pineHandles.get(id);
+    if (!h) return false;
+    h.style = styleOpt || {};
+    if (h.model) renderPineModel(h, h.model);
+    return true;
+  },
+  updatePine: (id, inputs) => {
+    const h = pineHandles.get(id);
+    if (!h || !h.session || !h.session.update) return false;
+    h.session.update(inputs || {});
+    return true;
+  },
+  removePine: (id) => {
+    const h = pineHandles.get(id);
+    if (!h) return false;
+    try { if (h.session && h.session.stop) h.session.stop(); } catch (_) {}
+    try { if (h.mounted && h.paneId && pro._chartApi) pro._chartApi.removeIndicator(h.paneId, h.indName); } catch (_) {}
+    pineHandles.delete(id);
+    return true;
+  },
+  addPine: async (source, inputs, props, styleOpt) => {
+    const id = "pine_" + (++pineSeq);
+    const indName = "TRADEX_PINE_" + pineSeq;
+    try {
+      const prepared = await pineEngine.prepare(source);
+      const title = (prepared && prepared.meta && prepared.meta.title) || "Pine";
+      const inputDefs = (prepared && prepared.inputs) || [];
+      const h = { id, indName, title, session: null, paneId: null, overlay: true, mounted: false, style: styleOpt || {}, model: null };
+      pineHandles.set(id, h);
+      return await new Promise((done) => {
+        let settled = false;
+        const t = setTimeout(() => {
+          if (!settled) { settled = true; done({ ok: true, id, pending: true, title, inputs: inputDefs, note: "no result within 15 s (no chart data yet?)" }); }
+        }, 15000);
+        const curSym = lastTicker || LabDefaultSymbol;
+        const curTf = LabTF.toPine(pro.getPeriod ? tfOf(pro.getPeriod()) : LabDefaultTF);
+        h.session = pineEngine.execute({
+          prepared,
+          market: { symbol: curSym, timeframe: curTf },
+          bars: pineBars(),
+          getBars: pineBars,
+          fetchSeries: (s, tfArg, range) => LabPineSeries(curSym, s, tfArg, range),
+          inputs: inputs || {},
+          props: props || {},
+          mode: "live",
+          historyState: lastBars.length ? "complete" : "backfill",
+        }, {
+          onModel: (model) => {
+            renderPineModel(h, model);
+            if (!settled) { settled = true; clearTimeout(t); done({ ok: true, id, title, inputs: inputDefs }); }
+            else if (LabEmbedded) window.parent.postMessage({ evt: "ind:ready", id }, location.origin);
+          },
+          onError: (err) => {
+            if (!settled) {
+              settled = true; clearTimeout(t); pineHandles.delete(id);
+              done({ ok: false, id, error: String((err && err.message) || err) });
+            }
+          },
+        });
+      });
+    } catch (e) {
+      pineHandles.delete(id);
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  },
   drawingCount: () => (pro._chartApi && pro._chartApi.getOverlayById ? -1 : -1),
   barCount: () => lastBars.length,
   lastBars: () => ({ ticker: lastTicker, bars: lastBars.slice(-3) }),

@@ -47,10 +47,11 @@ function edSave() {
 }
 function edAdd() {
   edSave(); const m = MINE.find((x) => x.id === ED.id);
-  if (st.engine !== "vela") return edLog("Pine draws on the Vela engine for now. Switch the engine to Vela, then Add to chart.", true);
+  if (!["vela", "klinechart", "lightweight"].includes(st.engine)) return edLog("Pine draws on Vela, KLineChart, or Lightweight. Switch the engine, then Add to chart.", true);
   // the editor's script replaces its previous instance on the chart (like TradingView's "Update on chart")
-  INDS.filter((x) => x.mineId === m.id).forEach((x) => removeInd(x));
-  const ind = { key: `own:${m.id}:${Date.now().toString(36)}`, mineId: m.id, name: m.name, origin: "own", source: m.source, on: true };
+  const curPane = typeof activePane === "number" ? activePane : 0;
+  INDS.filter((x) => x.mineId === m.id && (x.pane || 0) === curPane).forEach((x) => removeInd(x));
+  const ind = { key: `own:${m.id}:${Date.now().toString(36)}`, mineId: m.id, name: m.name, origin: "own", source: m.source, pane: curPane, on: true };
   INDS.push(ind); saveInds(); ED.key = ind.key; edLog("Adding to the chart..."); pineAdd(ind);
 }
 function onEditorResult(ind, m) {

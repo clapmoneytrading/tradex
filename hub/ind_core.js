@@ -10,7 +10,12 @@ INDS.forEach((x) => { if (x.err && /run on Vela for now|Vela only/i.test(x.err))
 INDS.forEach((x) => { if (x.err && /Unsupported Pine Script version|version 4 not supported/i.test(x.err)) { x.err = null; x.on = true; } });  // old v4 failures: the converter handles them now
 let liveIds = {}, busy = {}, reapply = false;
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-function frameWin() { return $("frame").contentWindow; }
+function frameWin(idx) { return typeof panes !== "undefined" && panes.length ? (panes[idx != null ? idx : (typeof activePane !== "undefined" ? activePane : 0)] || {}).frame?.contentWindow : $("frame") && $("frame").contentWindow; }
+function paneWin(ind) {
+  const n = typeof panes !== "undefined" ? panes.length : 1;
+  const idx = ind && ind.pane != null && ind.pane < n ? ind.pane : undefined;
+  return frameWin(idx);
+}
 
 // request/reply with the engine page (lab.js answers {evt:"reply", rid})
 let _rid = 0; const _waits = {};
@@ -35,7 +40,7 @@ function prepared(ind) {
 // Pine and Vela-native indicators draw only on the Vela engine. On another engine an indicator stays on and waits
 // (auto = reload after an engine switch); a user who adds one there is taken to Vela, where it draws.
 async function pineAdd(ind, auto) {
-  if (typeof st !== "undefined" && st.engine !== "vela") {
+  if (typeof st !== "undefined" && (ind.kind === "native" ? st.engine !== "vela" : !["vela", "klinechart", "lightweight"].includes(st.engine))) {
     if (auto) { ind.wait = true; indChanged(); return; }
     ind.wait = false; ind.on = true; saveInds();
     st.engine = "vela"; save(); paint(); loadEngine();   // the fresh Vela page re-adds every indicator that is on
@@ -44,17 +49,27 @@ async function pineAdd(ind, auto) {
   ind.wait = false;
   busy[ind.key] = true; indChanged();
   if (ind.kind === "native") { const r = await ask("native:add", { type: ind.type, inputs: ind.inputs }); onPineResult({ key: ind.key, ...r }); return; }
-  const w = frameWin(); if (!w) return;
-  w.postMessage({ cmd: "pine:add", key: ind.key, source: prepared(ind), inputs: ind.inputs, props: ind.props }, location.origin);
+  const w = paneWin(ind); if (!w) return;
+  w.postMessage({ cmd: "pine:add", key: ind.key, source: prepared(ind), inputs: ind.inputs, props: ind.props, style: ind.style }, location.origin);
+}
+function setIndStyle(ind, style) {
+  ind.style = style; saveInds();
+  const id = liveIds[ind.key];
+  if (id) { const w = paneWin(ind); if (w) w.postMessage({ cmd: "pine:style", id, style }, location.origin); }
+}
+function setIndInputs(ind, inputs) {
+  ind.inputs = inputs; saveInds();
+  const id = liveIds[ind.key];
+  if (id) { const w = paneWin(ind); if (w) w.postMessage({ cmd: "pine:inputs", id, inputs }, location.origin); }
 }
 function pineRemove(ind) {
   const id = liveIds[ind.key];
-  if (id) { const w = frameWin(); if (w) w.postMessage({ cmd: "pine:remove", id }, location.origin); }
+  if (id) { const w = paneWin(ind); if (w) w.postMessage({ cmd: "pine:remove", id }, location.origin); }
   delete liveIds[ind.key];
 }
 function onPineResult(m) {
   const ind = INDS.find((x) => x.key === m.key); delete busy[m.key]; if (!ind) return;
-  if (m.ok) { liveIds[ind.key] = m.id; ind.err = null; ind.pending = !!m.pending; } else { ind.err = m.error || "failed"; ind.on = false; }
+  if (m.ok) { liveIds[ind.key] = m.id; ind.err = null; ind.pending = !!m.pending; if (Array.isArray(m.inputs)) ind.inputDefs = m.inputs; } else { ind.err = m.error || "failed"; ind.on = false; }
   saveInds(); indChanged();
   if (window.onEditorResult) onEditorResult(ind, m);
 }
@@ -72,6 +87,7 @@ function onInputs(m) {
   ind.inputs = m.inputs; ind.props = m.props; saveInds();
 }
 function reapplyAll() { liveIds = {}; INDS.filter((x) => x.on).forEach((x) => pineAdd(x, true)); }
+function reapplyPane(pIdx) { INDS.filter((x) => x.on && (x.pane || 0) === pIdx).forEach((x) => pineAdd(x, true)); }
 function removeInd(ind) { pineRemove(ind); INDS = INDS.filter((y) => y !== ind); saveInds(); indChanged(); }
 function toggleInd(ind, on) { ind.on = on; ind.err = null; if (on) pineAdd(ind); else pineRemove(ind); saveInds(); indChanged(); }
 // One hook every view listens to (dialog list, Pine editor status).

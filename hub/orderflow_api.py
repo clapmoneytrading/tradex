@@ -18,10 +18,10 @@ Each row: t (bar open, UTC seconds), buy, sell, delta, hi, lo (running delta ext
 """
 import json, threading, time, urllib.request
 
-TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
+TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "D1": 86400}
 # Lower timeframe used inside each chart bar (like TradingView's automatic intrabar timeframe).
-INTRABAR = {"M1": "M1", "M5": "M1", "M15": "M1", "M30": "M5", "H1": "M5", "H4": "M15", "D1": "H1"}
-BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h", "D1": "1d"}
+INTRABAR = {"M1": "M1", "M5": "M1", "M15": "M1", "M30": "M5", "H1": "M5", "H2": "M15", "H4": "M15", "D1": "H1"}
+BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H2": "2h", "H4": "4h", "D1": "1d"}
 MAX_ROWS = 20000                      # lower bars per request; older chart bars beyond this get no delta
 FAPI = "https://fapi.binance.com/fapi/v1"
 RENAME = {"XCU": "COPPER", "XNG": "NATGAS"}  # MT5 name -> Binance futures base
@@ -285,7 +285,7 @@ def profile(ticker, tf, start_s, end_s, source="auto", history=None, mode="sessi
     if src is None:
         raise ValueError(f"no real buyer/seller data for {ticker}")
     # A session must hold several candles: on H4 sessions become days, on D1 days become weeks.
-    if tf == "H4" and mode == "sessions":
+    if tf in ("H2", "H4") and mode == "sessions":
         mode = "day"
     elif tf == "D1" and mode in ("sessions", "day"):
         mode = "week"

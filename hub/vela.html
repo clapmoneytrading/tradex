@@ -131,7 +131,7 @@ function applyTheme() {
   try { ws.setTheme(velaTheme()); } catch (e) { console.warn("setTheme", e); }
   (ws.cells ? ws.cells() : [ws.active]).forEach((c) => c && c.chart && colorChart(c.chart));
 }
-const VELA_TF = { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H4: "240", D1: "1D" };
+const VELA_TF = { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D" };
 function build(layout) {
   const host = document.getElementById("chart");
   if (ws && ws.destroy) ws.destroy();
@@ -221,7 +221,7 @@ window.labChart = {
     } catch (e) { return { ok: false, error: String(e.message || e) }; }
   },
   setMarket: (symbol, tf) => (window.LabDefaultSymbol = symbol, window.LabDefaultTF = tf || LabDefaultTF, ws.chart.setMarket({ symbol: "lab:" + symbol, timeframe: VELA_TF[tf] || "1" })),
-  setTF: (t) => ws.chart.setTimeframe ? ws.chart.setTimeframe({ M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H4: "240", D1: "1D" }[t]) : null,
+  setTF: (t) => ws.chart.setTimeframe ? ws.chart.setTimeframe(VELA_TF[t]) : null,
   addCodeTrendline,
   drawingCount: () => { try { return ws.chart.drawings.list().length; } catch (_) { return -1; } },
   barCount: () => lastBars.length,

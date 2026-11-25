@@ -3,6 +3,7 @@
 // the page shows only its chart and its own drawing tools.
 window.LabEmbedded = new URLSearchParams(location.search).get("embed") === "1" && window.parent !== window;
 if (LabEmbedded) {
+  window.addEventListener("pointerdown", () => window.parent.postMessage({ evt: "pane:focus" }, location.origin), true);
   document.documentElement.classList.add("embed");
   const st = document.createElement("style");
   st.textContent = [
@@ -107,7 +108,7 @@ window.LabDefaultSymbol = (LabSymbols.find((s) => s.ticker === "RMT_XAUUSD") || 
 // and the page reports user changes back with LabNotify (only when embedded).
 window.LabParams = new URLSearchParams(location.search);
 if (LabParams.get("symbol") && LabSymbols.some((s) => s.ticker === LabParams.get("symbol"))) window.LabDefaultSymbol = LabParams.get("symbol");
-window.LabDefaultTF = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"].includes(LabParams.get("tf")) ? LabParams.get("tf") : "M1";
+window.LabDefaultTF = ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1"].includes(LabParams.get("tf")) ? LabParams.get("tf") : "M1";
 window.LabNotify = (symbol, tf) => { if (LabEmbedded) window.parent.postMessage({ evt: "market", symbol, tf }, location.origin); };
 window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || !e.data || !window.labChart) return;
@@ -116,8 +117,10 @@ window.addEventListener("message", (e) => {
   if (e.data.cmd === "pine:add") {
     const reply = (r) => window.parent.postMessage({ evt: "pine", key: e.data.key, ...r }, location.origin);
     if (!labChart.addPine) reply({ ok: false, error: "Pine indicators run on Vela for now (the other engines get them in step 4)." });
-    else labChart.addPine(e.data.source, e.data.inputs, e.data.props).then(reply);
+    else labChart.addPine(e.data.source, e.data.inputs, e.data.props, e.data.style).then(reply);
   }
+  if (e.data.cmd === "pine:style" && labChart.stylePine) labChart.stylePine(e.data.id, e.data.style);
+  if (e.data.cmd === "pine:inputs" && labChart.updatePine) labChart.updatePine(e.data.id, e.data.inputs);
   if (e.data.cmd === "pine:remove" && labChart.removePine) labChart.removePine(e.data.id);
   // Indicators dialog: Vela natives catalog / add, and the live list of what is on the chart.
   const answer = (r) => window.parent.postMessage({ evt: "reply", rid: e.data.rid, ...r }, location.origin);
@@ -129,8 +132,8 @@ window.addEventListener("message", (e) => {
 
 // Timeframe helpers shared by the pages.
 window.LabTF = {
-  list: ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-  sec: { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 },
+  list: ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1"],
+  sec: { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H2: 7200, H4: 14400, D1: 86400 },
   // Turn anything like "1", "60", "240", "1D", "1h", "15m" into our code.
   fromAny(v) {
     const s = String(v).trim();
@@ -138,7 +141,33 @@ window.LabTF = {
     if (!m) return "M1";
     const n = parseInt(m[1] || "1", 10), u = m[2].toLowerCase();
     const minutes = u === "h" ? n * 60 : u === "d" ? n * 1440 : u === "w" ? n * 10080 : u === "s" ? 1 : n;
-    const map = { 1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 240: "H4", 1440: "D1" };
+    const map = { 1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 120: "H2", 240: "H4", 1440: "D1" };
     return map[minutes] || "M1";
   },
+  toPine(t) {
+    return { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D" }[t] || "1";
+  },
+};
+
+window.LabPineSeries = async function (defaultSym, s, tfArg, range = {}) {
+  const [raw, mod] = String(s || defaultSym).replace(/^lab:/, "").split(";");
+  const sym = raw || defaultSym;
+  const tf = LabTF.fromAny(tfArg || "1");
+  const limit = range.limit || 1000;
+  const src = window.srcOf ? window.srcOf(sym) : "binance";
+  const u = `/api/bars?symbol=${encodeURIComponent(sym)}&tf=${tf}&limit=${limit}&source=${src}` + (range.to ? `&to=${Math.floor(range.to)}` : "");
+  const r = await fetch(u);
+  const j = await r.json();
+  if (!Array.isArray(j)) throw new Error(j.error || "history failed");
+  const out = j.map((b) => ({ ...b, time: b.time * 1000 }));
+  if (mod && mod.toLowerCase() === "heikinashi") {
+    const ha = [];
+    for (let i = 0; i < out.length; i++) {
+      const b = out[i], close = (b.open + b.high + b.low + b.close) / 4;
+      const open = i === 0 ? (b.open + b.close) / 2 : (ha[i - 1].open + ha[i - 1].close) / 2;
+      ha.push({ ...b, open, high: Math.max(b.high, open, close), low: Math.min(b.low, open, close), close });
+    }
+    return ha;
+  }
+  return out;
 };

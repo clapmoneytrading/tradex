@@ -46,8 +46,8 @@ REMOTE_SSH_HOST = os.environ.get("REMOTE_MT5_SSH_HOST", "").strip()   # an alias
 REMOTE_RESTART_CMD = os.environ.get("REMOTE_MT5_RESTART_CMD", "").strip()  # optional command run over SSH by the Restart button
 REMOTE_ON = bool(REMOTE_SSH_HOST)
 CACHE_DIR = os.path.join(HERE, ".cache")
-TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
-BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h", "D1": "1d"}
+TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "D1": 86400}
+BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H2": "2h", "H4": "4h", "D1": "1d"}
 BINANCE_SYM = {"XAUUSD": "PAXGUSDT"}  # gold token; any other XXXUSD maps to XXXUSDT
 
 def bsym_of(symbol):
@@ -368,7 +368,7 @@ async def stream_binance(ws, symbol, tf):
 # Suffix .MARK / .INDEX = mark-price / index-price candles (linear and inverse only).
 BYBIT_REST = "https://api.bybit.com"
 BYBIT_WS = "wss://stream.bybit.com/v5/public/"
-BYBIT_TF = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "H4": "240", "D1": "D"}
+BYBIT_TF = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "H2": "120", "H4": "240", "D1": "D"}
 BYBIT_METAL = ("XAU", "XAG", "XPT", "XPD", "PAXG")
 bybit_symbols_cache = []
 
@@ -553,7 +553,7 @@ def health_report():
 
 # ---------------- Deriv (free, no login) ----------------
 DERIV_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
-DERIV_GRAN = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
+DERIV_GRAN = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "D1": 86400}
 DERIV_GROUP = {"forex": "forex", "commodities": "commodity", "cryptocurrency": "crypto", "indices": "indices"}
 deriv_symbols_cache = []
 
@@ -635,16 +635,36 @@ def deriv_history(symbol, tf, limit=HISTORY, to_ms=None):
     end = int(int(to_ms) / 1000) if to_ms else int(time.time())
     end -= end % g
     span, got, empty = 1000 * g, {}, 0
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        while len(got) < limit and empty < 4:
+    def _deriv_fetch(q):
+        try:
+            return _deriv_bars(deriv_request(q))
+        except RuntimeError as e:
+            if "rate limit" in str(e).lower():
+                time.sleep(1.5)
+                return _deriv_bars(deriv_request(q))
+            raise
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        while len(got) < limit and empty < 4 and end > 0:
             n = max(1, min(10, -(-(limit - len(got)) // 1000)))
-            wins = [(end - (k + 1) * span + g, end - k * span) for k in range(n)]
+            wins = [(max(0, end - (k + 1) * span + g), end - k * span) for k in range(n) if end - k * span > 0]
+            if not wins:
+                break
             reqs = [{"ticks_history": symbol, "style": "candles", "granularity": g, "start": a, "end": b, "count": 1000} for a, b in wins]
             before = len(got)
-            for bars in pool.map(lambda q: _deriv_bars(deriv_request(q)), reqs):
-                for x in bars:
-                    got[x["time"]] = x
-            empty = empty + 1 if len(got) == before else 0
+            try:
+                for bars in pool.map(_deriv_fetch, reqs):
+                    for x in bars:
+                        got[x["time"]] = x
+            except RuntimeError as e:
+                if got and "rate limit" in str(e).lower():
+                    break
+                raise
+            if len(got) == before:
+                if g >= 86400:
+                    break
+                empty += 1
+            else:
+                empty = 0
             end -= n * span
     return [got[t] for t in sorted(got)][-limit:]
 
@@ -897,6 +917,52 @@ def static_allowed(url_path):
         return parts[-1].lower().endswith(STATIC_EXT)
     return False
 
+_bars_cache = {}
+_bars_lock = threading.Lock()
+_bars_inflight = {}
+
+def cached_bars(source, symbol, tf, limit=HISTORY, to_ms=None):
+    src = source or "binance"
+    tf = tf if tf in TF_SEC else "M1"
+    lim = int(limit or HISTORY)
+    ttl = 300 if to_ms else min(15, max(3, TF_SEC[tf] // 20))
+    key = (src, symbol, tf, lim, str(to_ms or ""))
+    now = time.time()
+    with _bars_lock:
+        hit = _bars_cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        ev = _bars_inflight.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _bars_inflight[key] = ev
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        ev.wait(timeout=30)
+        with _bars_lock:
+            hit = _bars_cache.get(key)
+            if hit:
+                return hit[1]
+    try:
+        fn = {"mt5": mt5_history, "deriv": deriv_history, "arm": arm_history, "bybit": bybit_history}.get(src, binance_history)
+        bars = fn(symbol, tf, lim, to_ms)
+        with _bars_lock:
+            if len(_bars_cache) > 256:
+                cutoff = time.time() - 300
+                for k in [k for k, v in _bars_cache.items() if v[0] < cutoff]:
+                    del _bars_cache[k]
+                if len(_bars_cache) > 256:
+                    _bars_cache.clear()
+            _bars_cache[key] = (time.time(), bars)
+        return bars
+    finally:
+        if owner:
+            with _bars_lock:
+                _bars_inflight.pop(key, None)
+            ev.set()
+
 class LabHandler(SimpleHTTPRequestHandler):
     """Static files plus GET /api/bars?symbol=&tf=&limit=&to=<ms>&source=binance|mt5 and GET /api/symbols."""
     def do_GET(self):
@@ -967,14 +1033,35 @@ class LabHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 logbus.ev("server", "warn", f"orderflow profile {q.get('symbol')} {q.get('tf')}: {e}", every=30)
                 return self._json({"error": f"{e.__class__.__name__}: {e}"}, 502)
+        if self.path.startswith("/api/export.csv"):
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            sym = q.get("symbol", "BTCUSD")
+            tf = q.get("tf", "M1")
+            try:
+                bars = cached_bars(q.get("source"), sym, tf, q.get("limit", 5000), q.get("to"))
+                lines = ["time_utc,timestamp,open,high,low,close,volume"]
+                for b in bars:
+                    ts = int(b["time"])
+                    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+                    lines.append(f"{iso},{ts},{b['open']},{b['high']},{b['low']},{b['close']},{b['volume']}")
+                csv_bytes = ("\n".join(lines) + "\n").encode("utf-8")
+                safe_name = "".join(c for c in f"{sym}_{tf}" if c.isalnum() or c in "-_")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_name}.csv"')
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(csv_bytes)
+                return
+            except Exception as e:
+                return self._json({"error": str(e)}, 502)
         if not self.path.startswith("/api/bars"):
             if not static_allowed(self.path):
                 return self._json({"error": "not found"}, 404)
             return super().do_GET()
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
         try:
-            fn = {"mt5": mt5_history, "deriv": deriv_history, "arm": arm_history, "bybit": bybit_history}.get(q.get("source"), binance_history)
-            bars = fn(q.get("symbol", "BTCUSD"), q.get("tf", "M1"), q.get("limit", HISTORY), q.get("to"))
+            bars = cached_bars(q.get("source"), q.get("symbol", "BTCUSD"), q.get("tf", "M1"), q.get("limit", HISTORY), q.get("to"))
             body, code = json.dumps(bars).encode(), 200
             feedlog.http_bars(q.get("source"), q.get("symbol"), q.get("tf"), n=len(bars))
         except Exception as e:
