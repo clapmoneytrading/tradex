@@ -36,11 +36,12 @@ const provider = {
   async getBars(ticker, timeframe, range = {}) {
     const tf = LabTF.fromAny(timeframe);
     const want = range.limit || 1000;
-    // Feeds cap one reply (remote MT5 5000, Bybit/Binance 1000). Vela treats a short reply as "no older history exists",
-    // so page backwards here until we have what Vela asked for, or the feed runs out (2026-11-13).
+    // Initial load: fetch 1 fast page (1000 bars) so charts open in <1s without hitting broker rate limits.
+    // Only page backwards when Vela explicitly asks for a historical range (range.from / range.to).
+    const maxPages = (!range.to && !range.from) ? 1 : (window.srcOf && window.srcOf(ticker) === "fyers" ? 4 : 10);
     let out = [], to = range.to;
-    for (let page = 0; page < 40 && out.length < want; page++) {
-      const got = (await LabFeed.history(ticker, tf, to, want - out.length)).map((b) => ({ ...b, time: b.time * 1000 }));
+    for (let page = 0; page < maxPages && out.length < want; page++) {
+      const got = (await LabFeed.history(ticker, tf, to, Math.min(1000, want - out.length))).map((b) => ({ ...b, time: b.time * 1000 }));
       const older = out.length ? got.filter((b) => b.time < out[0].time) : got;
       if (!older.length) break;
       out = older.concat(out);
@@ -131,7 +132,7 @@ function applyTheme() {
   try { ws.setTheme(velaTheme()); } catch (e) { console.warn("setTheme", e); }
   (ws.cells ? ws.cells() : [ws.active]).forEach((c) => c && c.chart && colorChart(c.chart));
 }
-const VELA_TF = { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D" };
+const VELA_TF = { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D", W1: "1W", MN1: "1M" };
 function build(layout) {
   const host = document.getElementById("chart");
   if (ws && ws.destroy) ws.destroy();
@@ -139,9 +140,8 @@ function build(layout) {
   ws = new VelaLab.VelaWorkspace(host, {
     // "1" (not false) so the layout can change in place later; top-level symbol/timeframe are every cell's default.
     layout: layout || "1", symbol: "lab:" + LabDefaultSymbol, timeframe: VELA_TF[LabDefaultTF], live: true,
-    // History depth. Vela's default is 500 candles and it does NOT load more when you scroll left, so 1m-15m charts
-    // only reached back a few days. More: chart settings > Advanced > Bars to fetch, or the 3M/6M/1Y buttons (2026-11-13).
-    bars: 10000,
+    // 1000 bars = 1 fast request on initial load (3M/6M/1Y buttons still fetch deeper history on demand).
+    bars: 1000,
     theme: velaTheme(), upColor: HubTheme.up, downColor: HubTheme.down,
     providers: { lab: () => provider }, persist: false,
     // Inside the TradeX wrapper, symbol / timeframe / layout live in the wrapper's bar only (no duplicate controls).
