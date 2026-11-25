@@ -159,17 +159,41 @@ window.TradingPanel = (() => {
   }
 
   // ---- Strategy Tester metrics (TradingView style) ----
-  function computeStats(trades, initialCap = DEFAULT_CAP) {
-    const closed = trades.filter((t) => t.status !== "open" && t.exit_time != null);
-    const open = trades.filter((t) => t.status === "open" || t.exit_time == null);
+  function normTrade(t) {
+    const isLong = t.side ? t.side === "long" : (t.size || 0) >= 0;
+    const qty = t.qty != null ? Math.abs(Number(t.qty)) : Math.abs(Number(t.size || 0));
+    const entryId = (t.entry && t.entry.id) || t.entry_id || "";
+    const entryTime = (t.entry && t.entry.time) ?? t.entry_time;
+    const entryPrice = (t.entry && t.entry.price) ?? t.entry_price;
+    const exitId = (t.exit && t.exit.id) || t.exit_id || "";
+    const exitTime = (t.exit && t.exit.time) ?? t.exit_time;
+    const exitPrice = (t.exit && t.exit.price) ?? t.exit_price;
+    const isOpen = t.open != null ? !!t.open : (t.status === "open" || exitTime == null);
+    const comm = Number(t.commission || 0);
+    let profit = t.pnl != null ? Number(t.pnl) : (t.profit != null ? Number(t.profit) : NaN);
+    if (!Number.isFinite(profit) && !isOpen && Number.isFinite(entryPrice) && Number.isFinite(exitPrice)) {
+      profit = (isLong ? exitPrice - entryPrice : entryPrice - exitPrice) * qty - comm;
+    }
+    return {
+      isLong, qty, entryId, entryTime, entryPrice, exitId, exitTime, exitPrice, isOpen, comm,
+      profit: Number.isFinite(profit) ? profit : 0,
+      maxRunup: Number(t.maxRunup ?? t.max_runup ?? 0),
+      maxDrawdown: Number(t.maxDrawdown ?? t.max_drawdown ?? 0),
+    };
+  }
+
+  function computeStats(rawTrades, initialCap = DEFAULT_CAP) {
+    const trades = rawTrades.map(normTrade);
+    const closed = trades.filter((t) => !t.isOpen);
+    const open = trades.filter((t) => t.isOpen);
 
     function subset(list) {
       let net = 0, gp = 0, gl = 0, wins = 0, losses = 0, comm = 0, maxWin = 0, maxLoss = 0;
       let peak = initialCap, eq = initialCap, maxDD = 0, maxDDPct = 0;
       const curve = [initialCap];
       for (const t of list) {
-        const p = Number(t.profit || 0);
-        comm += Number(t.commission || 0);
+        const p = t.profit;
+        comm += t.comm;
         net += p;
         if (p > 0) { wins++; gp += p; if (p > maxWin) maxWin = p; }
         else if (p < 0) { losses++; gl += Math.abs(p); if (p < maxLoss) maxLoss = p; }
@@ -199,10 +223,10 @@ window.TradingPanel = (() => {
     }
 
     const all = subset(closed);
-    const longs = subset(closed.filter((t) => (t.size || 0) > 0));
-    const shorts = subset(closed.filter((t) => (t.size || 0) < 0));
-    const openPnl = open.reduce((s, t) => s + Number(t.profit || 0), 0);
-    return { all, longs, shorts, closed, open, openPnl, initialCap };
+    const longs = subset(closed.filter((t) => t.isLong));
+    const shorts = subset(closed.filter((t) => !t.isLong));
+    const openPnl = open.reduce((s, t) => s + t.profit, 0);
+    return { all, longs, shorts, trades, closed, open, openPnl, initialCap };
   }
 
   function onStrategyReport(rep) {
@@ -451,23 +475,21 @@ window.TradingPanel = (() => {
     } else {
       let cum = 0;
       sb.innerHTML = `<table class="tp-tbl"><thead><tr><th>#</th><th>Type</th><th>Signal</th><th>Entry Time</th><th>Entry Price</th><th>Exit Time</th><th>Exit Price</th><th>Qty</th><th>Profit</th><th>Cum. Profit</th><th>Run-up</th><th>Drawdown</th></tr></thead><tbody>${
-        rep.trades.map((t, idx) => {
-          const isLong = (t.size || 0) >= 0;
-          const p = Number(t.profit || 0);
-          if (t.status !== "open") cum += p;
+        st.trades.map((t, idx) => {
+          if (!t.isOpen) cum += t.profit;
           return `<tr>
             <td>${idx + 1}</td>
-            <td class="${isLong ? "pos" : "neg"}">${isLong ? "Long" : "Short"} ${t.status === "open" ? "(Open)" : ""}</td>
-            <td>${esc(t.entry_id || "")}${t.exit_id ? " → " + esc(t.exit_id) : ""}</td>
-            <td>${fmtTime(t.entry_time)}</td>
-            <td>${fmtNum(Number(t.entry_price), 2)}</td>
-            <td>${t.exit_time ? fmtTime(t.exit_time) : "-"}</td>
-            <td>${t.exit_price != null ? fmtNum(Number(t.exit_price), 2) : "-"}</td>
-            <td>${Math.abs(Number(t.size || 0)).toFixed(2)}</td>
-            <td class="${p >= 0 ? "pos" : "neg"}">${fmtMoney(p, sSym)}</td>
+            <td class="${t.isLong ? "pos" : "neg"}">${t.isLong ? "Long" : "Short"}${t.isOpen ? " (Open)" : ""}</td>
+            <td>${esc(t.entryId)}${t.exitId ? " → " + esc(t.exitId) : ""}</td>
+            <td>${fmtTime(t.entryTime)}</td>
+            <td>${t.entryPrice != null ? fmtNum(Number(t.entryPrice), t.entryPrice < 10 ? 4 : 2) : "-"}</td>
+            <td>${t.exitTime ? fmtTime(t.exitTime) : "-"}</td>
+            <td>${t.exitPrice != null ? fmtNum(Number(t.exitPrice), t.exitPrice < 10 ? 4 : 2) : "-"}</td>
+            <td>${t.qty.toFixed(t.qty < 1 ? 4 : 2)}</td>
+            <td class="${t.profit >= 0 ? "pos" : "neg"}">${fmtMoney(t.profit, sSym)}</td>
             <td class="${cum >= 0 ? "pos" : "neg"}">${fmtMoney(cum, sSym)}</td>
-            <td>${fmtMoney(Number(t.max_runup || 0), sSym)}</td>
-            <td class="neg">${fmtMoney(-Math.abs(Number(t.max_drawdown || 0)), sSym)}</td>
+            <td>${fmtMoney(t.maxRunup, sSym)}</td>
+            <td class="neg">${fmtMoney(-Math.abs(t.maxDrawdown), sSym)}</td>
           </tr>`;
         }).join("")
       }</tbody></table>`;
