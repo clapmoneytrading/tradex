@@ -325,7 +325,7 @@ def history(symbol, tf, limit=1000, to_ms=None):
         raise RuntimeError(f"Unsupported timeframe for Fyers: {tf}")
     sec = TF_SEC[tf]
     lim = int(limit)
-    ttl = 600 if to_ms else (180 if tf in ("W1", "MN1") else max(20, min(120, sec // 3)))
+    ttl = 600 if to_ms else (180 if tf in ("W1", "MN1") else max(45, min(180, sec // 2)))
     key = (symbol, tf, lim, str(int(to_ms) // 1000) if to_ms else "")
     now = time.time()
 
@@ -352,6 +352,9 @@ def history(symbol, tf, limit=1000, to_ms=None):
 
     try:
         if time.time() < _rate_until:
+            with _hist_lock:
+                if hit:
+                    return hit[1]
             raise RuntimeError("Fyers rate limit cooldown (50 req/min); retrying shortly.")
         range_to = int(int(to_ms) // 1000) if to_ms else int(time.time())
         chunks = 3 if tf in ("W1", "MN1") else 1
@@ -379,7 +382,7 @@ def history(symbol, tf, limit=1000, to_ms=None):
             if data.get("s") != "ok":
                 msg = data.get("message") or str(data)
                 if _is_rate_limit(msg):
-                    _rate_until = time.time() + 15
+                    _rate_until = time.time() + 65
                     if all_candles:
                         break
                     with _hist_lock:
@@ -419,7 +422,7 @@ def history(symbol, tf, limit=1000, to_ms=None):
 def _quote_loop():
     global _rate_until
     while True:
-        time.sleep(3.0)
+        time.sleep(5.0)
         if time.time() < _rate_until:
             continue
         with _quote_lock:
@@ -437,7 +440,7 @@ def _quote_loop():
                 )
                 if data.get("s") != "ok":
                     if _is_rate_limit(data.get("message")):
-                        _rate_until = time.time() + 20
+                        _rate_until = time.time() + 65
                     break
                 with _quote_lock:
                     for item in data.get("d") or []:

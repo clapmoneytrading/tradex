@@ -24,11 +24,18 @@
        background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%23958c7e' stroke-width='1.6'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cpath d='M9.5 9.5 13 13'/%3E%3C/svg%3E");
        background-repeat:no-repeat; background-position:8px 50% }
   #q:focus { outline:none; border-color:var(--accent); font-weight:400 }
-  #list { position:fixed; top:36px; width:440px; max-height:70vh; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:4px; box-shadow:0 10px 30px #000a; z-index:10 }
-  #list div { display:flex; gap:10px; align-items:baseline; padding:6px 10px; cursor:pointer }
-  #list div:hover, #list div.hi { background:var(--raised) }
-  #list b { min-width:84px; font-family:var(--mono); font-weight:600 } #list span { color:var(--dim); overflow:hidden; text-overflow:ellipsis; flex:1 }
-  #list i { font-style:normal; font-size:11px; color:var(--accent); font-family:var(--mono) }
+  #list { position:fixed; top:36px; width:460px; max-height:70vh; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:4px; box-shadow:0 10px 30px #000a; z-index:10 }
+  #list[hidden] { display:none }
+  .search-tabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; flex:none }
+  .search-tabs button { background:transparent; color:var(--dim); border:1px solid transparent; border-radius:12px; padding:3px 9px; font:inherit; font-size:11px; cursor:pointer }
+  .search-tabs button:hover { color:var(--text); background:var(--raised) }
+  .search-tabs button.on { color:var(--accentInk); background:var(--accent); font-weight:600 }
+  .search-rows { overflow:auto; flex:1 }
+  .search-rows div { display:flex; gap:10px; align-items:baseline; padding:6px 10px; cursor:pointer }
+  .search-rows div:hover, .search-rows div.hi { background:var(--raised) }
+  .search-rows b { min-width:96px; font-family:var(--mono); font-weight:600 } .search-rows span { color:var(--dim); overflow:hidden; text-overflow:ellipsis; flex:1 }
+  .search-rows i { font-style:normal; font-size:11px; color:var(--accent); font-family:var(--mono) }
+  .search-empty { padding:14px 12px; color:var(--dim); font-size:12px }
   #ticker { color:var(--dim); font:12px var(--mono) }
   #stage { position:relative; grid-row:2; grid-column:1; min-width:0; display:grid; gap:0 }
   #stage.layout-1    { grid-template-columns:1fr; grid-template-rows:1fr }
@@ -402,9 +409,9 @@ function push() {
   else loadPane(activePane);
   savePaneConfig();
 }
-function chooseInstrument(k) {
+function chooseInstrument(k, preferredBroker) {
   const i = inst(k); if (!i) return;
-  const order = [st.broker, ...DATA.brokers.map((b) => b.id)];
+  const order = [preferredBroker, st.broker, ...DATA.brokers.map((b) => b.id)].filter(Boolean);
   const b = order.find((x) => i.brokers[x]);
   Object.assign(st, { key: k, broker: b, ticker: i.brokers[b][0].ticker });
   push();
@@ -435,30 +442,59 @@ function paint() {
 }
 $("variant").onchange = (e) => { st.ticker = e.target.value; push(); };
 
-// Instrument search
-let hits = [], hi = 0;
+// Instrument search with broker/market tabs
+let hits = [], hi = 0, searchTab = "all";
+function searchTabs() {
+  const tabs = [{ id: "all", label: "All" }];
+  const labels = { fyers: "NSE", binance: "Binance", bybit: "Bybit", deriv: "Deriv", arm: "Remote MT5", mt5: "Local MT5" };
+  DATA.brokers.forEach((b) => tabs.push({ id: b.id, label: labels[b.id] || b.name }));
+  return tabs;
+}
 function search() {
   const q = $("q").value.trim().toUpperCase(), words = q.split(/\s+/).filter(Boolean);
-  hits = DATA.instruments.filter((i) => words.every((w) => i.key.includes(w) || i.name.toUpperCase().includes(w))).slice(0, 150);
-  hi = 0; const L = $("list"); L.innerHTML = "";
-  hits.forEach((i, n) => {
-    const d = document.createElement("div"); if (n === 0) d.className = "hi";
-    d.innerHTML = `<b></b><span></span><i></i>`;
-    d.children[0].textContent = i.key; d.children[1].textContent = i.name;
-    d.children[2].textContent = Object.keys(i.brokers).map((b) => SHORT[b]).join(" ");
-    d.onmousedown = (e) => { e.preventDefault(); pick(i.key); };
-    L.appendChild(d);
+  let pool = DATA.instruments;
+  if (searchTab !== "all") pool = pool.filter((i) => !!i.brokers[searchTab]);
+  if (searchTab === "fyers" && !words.length) {
+    pool = [...pool].sort((a, b) => (a.group === "nse-index" ? 0 : 1) - (b.group === "nse-index" ? 0 : 1) || a.key.localeCompare(b.key));
+  }
+  hits = pool.filter((i) => words.every((w) => i.key.includes(w) || i.name.toUpperCase().includes(w))).slice(0, 250);
+  hi = 0;
+  const L = $("list"); L.innerHTML = "";
+  const tabBar = document.createElement("div"); tabBar.className = "search-tabs";
+  searchTabs().forEach((t) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = t.label;
+    if (t.id === searchTab) b.className = "on";
+    b.onmousedown = (e) => { e.preventDefault(); searchTab = t.id; search(); };
+    tabBar.appendChild(b);
   });
-  const r = $("q").getBoundingClientRect(); L.style.left = r.left + "px"; L.hidden = !hits.length;
+  const rowsBox = document.createElement("div"); rowsBox.className = "search-rows";
+  if (!hits.length) {
+    const em = document.createElement("div"); em.className = "search-empty";
+    em.textContent = searchTab === "fyers" ? "No matching NSE symbols (connect Fyers in Feeds for full list)." : "No matching instruments.";
+    rowsBox.appendChild(em);
+  } else {
+    hits.forEach((i, n) => {
+      const d = document.createElement("div"); if (n === 0) d.className = "hi";
+      d.innerHTML = `<b></b><span></span><i></i>`;
+      d.children[0].textContent = i.key; d.children[1].textContent = i.name;
+      d.children[2].textContent = searchTab !== "all" ? (SHORT[searchTab] || searchTab) : Object.keys(i.brokers).map((b) => SHORT[b]).join(" ");
+      d.onmousedown = (e) => { e.preventDefault(); pick(i.key); };
+      rowsBox.appendChild(d);
+    });
+  }
+  L.append(tabBar, rowsBox);
+  const r = $("q").getBoundingClientRect(); L.style.left = r.left + "px"; L.hidden = false;
 }
-function pick(k) { $("list").hidden = true; $("q").blur(); chooseInstrument(k); }
+function pick(k) { $("list").hidden = true; $("q").blur(); chooseInstrument(k, searchTab !== "all" ? searchTab : undefined); }
 $("q").onfocus = () => { $("q").select(); $("q").value = ""; search(); };
 $("q").oninput = search;
 $("q").onblur = () => { $("list").hidden = true; paint(); };
 $("q").onkeydown = (e) => {
-  const rows = $("list").children;
+  const rows = $("list").querySelector(".search-rows")?.children || [];
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-    e.preventDefault(); if (!rows.length) return;
+    e.preventDefault(); if (!rows.length || !hits.length) return;
     rows[hi].className = ""; hi = (hi + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length;
     rows[hi].className = "hi"; rows[hi].scrollIntoView({ block: "nearest" });
   } else if (e.key === "Enter" && hits[hi]) pick(hits[hi].key);

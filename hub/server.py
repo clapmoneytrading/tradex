@@ -770,6 +770,67 @@ def binance_history(symbol, tf, limit=HISTORY, to_ms=None):
 CRYPTO = [("BTCUSD", "Bitcoin"), ("ETHUSD", "Ethereum"), ("SOLUSD", "Solana"), ("BNBUSD", "BNB"),
           ("XRPUSD", "XRP"), ("DOGEUSD", "Dogecoin"), ("ADAUSD", "Cardano"), ("LINKUSD", "Chainlink"),
           ("PAXGUSD", "Gold token PAXG (thin trading, not gold spot)")]
+
+CRYPTO_NAMES = {
+    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "BNB": "BNB", "XRP": "XRP",
+    "DOGE": "Dogecoin", "ADA": "Cardano", "LINK": "Chainlink", "AVAX": "Avalanche",
+    "DOT": "Polkadot", "TRX": "TRON", "TON": "Toncoin", "SHIB": "Shiba Inu",
+    "SUI": "Sui", "LTC": "Litecoin", "BCH": "Bitcoin Cash", "UNI": "Uniswap",
+    "NEAR": "NEAR Protocol", "APT": "Aptos", "ICP": "Internet Computer", "PEPE": "Pepe",
+    "ETC": "Ethereum Classic", "XLM": "Stellar", "HBAR": "Hedera", "FIL": "Filecoin",
+    "ARB": "Arbitrum", "OP": "Optimism", "INJ": "Injective", "ATOM": "Cosmos",
+    "AAVE": "Aave", "VET": "VeChain", "RENDER": "Render", "FET": "Artificial Superintelligence",
+    "TAO": "Bittensor", "WIF": "dogwifhat", "BONK": "Bonk", "FLOKI": "FLOKI",
+    "SEI": "Sei", "STX": "Stacks", "IMX": "Immutable", "RUNE": "THORChain",
+    "GRT": "The Graph", "THETA": "Theta Network", "ALGO": "Algorand", "FTM": "Fantom",
+    "S": "Sonic", "ENA": "Ethena", "ONDO": "Ondo", "WLD": "Worldcoin",
+    "TIA": "Celestia", "JUP": "Jupiter", "PYTH": "Pyth Network", "STRK": "Starknet",
+    "PAXG": "Gold token PAXG (thin trading, not gold spot)",
+}
+BINANCE_STABLES = {"USDC", "FDUSD", "TUSD", "BUSD", "USDP", "DAI", "EUR", "AEUR", "EURI", "USD1", "USDE", "RLUSD"}
+binance_symbols_cache = [{"ticker": t, "name": n, "source": "binance", "group": "crypto"} for t, n in CRYPTO]
+
+def binance_load_symbols():
+    """Load top 100 Binance USDT spot pairs by 24h quote volume."""
+    global binance_symbols_cache
+    try:
+        req = urllib.request.Request(
+            "https://api.binance.com/api/v3/ticker/24hr",
+            headers={"User-Agent": "TradeX/1.0"},
+        )
+        rows = json.loads(urllib.request.urlopen(req, timeout=20).read())
+        usdt = []
+        for r in rows:
+            sym = r.get("symbol", "")
+            if not sym.endswith("USDT"):
+                continue
+            base = sym[:-4]
+            if not base or base in BINANCE_STABLES or base.endswith(("UP", "DOWN", "BULL", "BEAR")):
+                continue
+            qvol = float(r.get("quoteVolume") or 0)
+            last_p = float(r.get("lastPrice") or 0)
+            if qvol <= 0 or last_p <= 0:
+                continue
+            usdt.append((qvol, base, last_p))
+        usdt.sort(key=lambda x: -x[0])
+        out = []
+        for _, base, last_p in usdt[:100]:
+            ticker = base + "USD"
+            name = CRYPTO_NAMES.get(base, f"{base} / USDT")
+            digits = 2 if last_p >= 10 else (4 if last_p >= 0.01 else 6)
+            out.append({"ticker": ticker, "name": name, "source": "binance", "group": "crypto", "digits": digits})
+        if out:
+            binance_symbols_cache = out
+            print(f"Binance: {len(out)} top crypto pairs loaded", flush=True)
+            return True
+        return False
+    except Exception as e:
+        print("Binance symbols failed:", e, flush=True)
+        return False
+
+def binance_symbols_loop():
+    while True:
+        time.sleep(3600 if binance_load_symbols() else 60)
 MT5_GROUPS = ("forex", "metal", "energ", "commod", "oil", "agri", "soft")  # path words we keep
 
 def mt5_watchdog():
@@ -890,8 +951,7 @@ def instrument_key(s):
     return None, None
 
 def build_instruments():
-    syms = arm_symbols_cache + deriv_symbols_cache + bybit_symbols_cache + fyers_feed.symbols_cache + mt5_symbol_list()[0] + \
-        [{"ticker": t, "name": n, "source": "binance", "group": "crypto"} for t, n in CRYPTO]
+    syms = arm_symbols_cache + deriv_symbols_cache + bybit_symbols_cache + fyers_feed.symbols_cache + mt5_symbol_list()[0] + binance_symbols_cache
     if _instr_cache["n"] == len(syms):
         return _instr_cache["data"]
     inst = {}
@@ -926,7 +986,7 @@ def feed_status():
         return _status_cache["data"]
     data = {"deriv": {"ok": bool(deriv_symbols_cache), "msg": f"{len(deriv_symbols_cache)} symbols"},
             "bybit": {"ok": bool(bybit_symbols_cache), "msg": f"{len(bybit_symbols_cache)} charts"},
-            "binance": {"ok": True, "msg": "public feed"}}
+            "binance": {"ok": True, "msg": f"{len(binance_symbols_cache)} pairs"}}
     fst = fyers_feed.status()
     data["fyers"] = {"ok": fst["connected"], "msg": f"{fst['symbols']} NSE symbols" if fst["connected"] else (fst["last_err"] or "not connected (open Feeds to login)")}
     if REMOTE_ON:
@@ -1010,10 +1070,9 @@ class LabHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
         if self.path.startswith("/api/symbols"):
-            crypto = [{"ticker": t, "name": n, "source": "binance", "group": "crypto"} for t, n in CRYPTO]
             mt5_list, err = mt5_symbol_list()
-            return self._json({"symbols": arm_symbols_cache + bybit_symbols_cache + deriv_symbols_cache + fyers_feed.symbols_cache + mt5_list + crypto, "mt5": err or "ok", "arm": arm_status["msg"],
-                               "deriv": len(deriv_symbols_cache), "bybit": len(bybit_symbols_cache), "fyers": len(fyers_feed.symbols_cache), "ws_port": WS_PORT}, 200)
+            return self._json({"symbols": arm_symbols_cache + bybit_symbols_cache + deriv_symbols_cache + fyers_feed.symbols_cache + mt5_list + binance_symbols_cache, "mt5": err or "ok", "arm": arm_status["msg"],
+                               "deriv": len(deriv_symbols_cache), "bybit": len(bybit_symbols_cache), "binance": len(binance_symbols_cache), "fyers": len(fyers_feed.symbols_cache), "ws_port": WS_PORT}, 200)
         if self.path.startswith("/api/fyers/status"):
             return self._json(fyers_feed.status(), 200)
         if self.path.startswith("/api/fyers/login"):
@@ -1211,6 +1270,7 @@ async def main():
     print(f"Clock offset vs time.windows.com: {measure_clock_offset():+.0f} ms (corrected in lag numbers)", flush=True)
     threading.Thread(target=deriv_symbols_loop, daemon=True).start()
     threading.Thread(target=bybit_symbols_loop, daemon=True).start()
+    threading.Thread(target=binance_symbols_loop, daemon=True).start()
     threading.Thread(target=fyers_feed.symbols_loop, daemon=True).start()
     feedlog.start(FEED_HEALTH, ARM_PORT if REMOTE_ON else None, feed_status)
     print(f"TradeX: open http://localhost:{HTTP_PORT}/hub.html  (data on ws://localhost:{WS_PORT})", flush=True)
