@@ -521,7 +521,10 @@ function search() {
   const r = $("q").getBoundingClientRect(); L.style.left = r.left + "px"; L.hidden = false;
 }
 function pick(k) { $("list").hidden = true; $("q").blur(); chooseInstrument(k, searchTab !== "all" ? searchTab : undefined); }
-$("q").onfocus = () => { $("q").select(); $("q").value = ""; search(); };
+$("q").onfocus = () => {
+  $("q").select(); $("q").value = ""; search();
+  if (!DATA.instruments.some((i) => i.brokers.fyers)) refreshInstruments();
+};
 $("q").oninput = search;
 $("q").onblur = () => { $("list").hidden = true; paint(); };
 $("q").onkeydown = (e) => {
@@ -576,9 +579,26 @@ window.addEventListener("message", (e) => {
   save(); paint();
 });
 
+async function refreshInstruments() {
+  try {
+    const fresh = await (await fetch("/api/instruments")).json();
+    if (fresh && Array.isArray(fresh.instruments)) {
+      DATA = fresh;
+      BY_TICKER.clear();
+      DATA.instruments.forEach((i) => Object.entries(i.brokers).forEach(([b, opts]) => opts.forEach((o) => BY_TICKER.set(o.ticker, { key: i.key, broker: b }))));
+      if (!$("list").hidden) search();
+      paint();
+    }
+  } catch (_) {}
+}
+
+let _lastStatusSig = "";
 async function pollStatus() {
   try { status = await (await fetch("/api/status")).json(); }
   catch (_) { status = Object.fromEntries(DATA.brokers.map((b) => [b.id, { ok: false, msg: "chart server not answering" }])); }
+  const sig = Object.entries(status).map(([k, v]) => `${k}:${v && v.msg}`).join("|");
+  if (_lastStatusSig && sig !== _lastStatusSig) refreshInstruments();
+  _lastStatusSig = sig;
   paint(); paintStatus();
 }
 function paintStatus() {
