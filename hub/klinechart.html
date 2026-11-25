@@ -23,7 +23,7 @@
 <script src="theme.js"></script>
 <script src="lab.js"></script>
 <script>
-const SYMBOLS = LabSymbols.map((s) => ({ ticker: s.ticker, name: s.name, shortName: s.ticker, exchange: s.source === "arm" ? "Remote MT5" : s.source === "bybit" ? "BYBIT" : s.source === "mt5" ? "MT5" : s.source === "deriv" ? "DERIV" : "BINANCE",
+const SYMBOLS = LabSymbols.map((s) => ({ ticker: s.ticker, name: s.name, shortName: s.ticker, exchange: s.source === "arm" ? "Remote MT5" : s.source === "bybit" ? "BYBIT" : s.source === "mt5" ? "MT5" : s.source === "deriv" ? "DERIV" : s.source === "fyers" ? "NSE" : "BINANCE",
   pricePrecision: s.digits != null ? s.digits : (["XRPUSD", "DOGEUSD", "ADAUSD"].includes(s.ticker) ? 4 : 2), volumePrecision: 2 }));
 const PERIODS = [
   { multiplier: 1, timespan: "minute", text: "1m" }, { multiplier: 5, timespan: "minute", text: "5m" },
@@ -124,7 +124,8 @@ function renderPineModel(h, model) {
   const api = pro._chartApi;
   if (!api || typeof klinecharts === "undefined") return;
   const series = (model && model.series) ? model.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
-  const maps = series.map((s) => { const m = new Map(); for (const p of s.points) m.set(p.time, p.value); return m; });
+  const maps = series.map((s) => { const m = new Map(); for (const p of s.points) { const e = { v: p.value }; if (p.color) e.c = p.color; m.set(p.time, e); } return m; });
+  const colorMaps = series.map((s) => { const m = new Map(); for (const p of s.points) if (p.color) m.set(p.time, p.color); return m; });
   const overlay = !!(model && model.overlay);
   const title = (model && (model.shorttitle || model.title)) || h.title || "Pine";
   const palette = HubTheme.lines || ["#5fb3e0", "#f5a623", "#a78bfa", "#34d399", "#f87171"];
@@ -146,7 +147,7 @@ function renderPineModel(h, model) {
     figures,
     calc: (kLineDataList) => kLineDataList.map((d) => {
       const row = {};
-      maps.forEach((m, idx) => { const v = m.get(d.timestamp); if (v != null && Number.isFinite(v)) row["p" + idx] = v; });
+      maps.forEach((m, idx) => { const e = m.get(d.timestamp); if (e && e.v != null && Number.isFinite(e.v)) row["p" + idx] = e.v; });
       return row;
     }),
   };
@@ -157,29 +158,34 @@ function renderPineModel(h, model) {
       const result = indicator.result || [];
       const lw = stOpt.lineWidth || 1.5;
       series.forEach((s, idx) => {
-        const col = stOpt.color || s.color || palette[idx % palette.length];
+        const basecol = stOpt.color || s.color || palette[idx % palette.length];
+        const cMap = colorMaps[idx];
         const key = "p" + idx;
         ctx.save();
-        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw;
+        ctx.lineWidth = lw;
         if (ls === "line_breaks") {
-          ctx.beginPath();
-          let started = false;
+          let started = false, prevCol = basecol;
+          ctx.beginPath(); ctx.strokeStyle = prevCol;
           for (let i = range.from; i <= range.to && i < dataList.length; i++) {
             const v = result[i] && result[i][key];
             if (v == null || !Number.isFinite(v)) { started = false; continue; }
             const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
-            if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+            const c = (cMap && cMap.get(dataList[i].timestamp)) || basecol;
+            if (c !== prevCol) { ctx.stroke(); ctx.beginPath(); ctx.strokeStyle = c; ctx.moveTo(x, y); prevCol = c; }
+            else if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
           }
           ctx.stroke();
         }
         if (ls === "stepline" || ls === "stepline_breaks" || ls === "stepline_diamond") {
-          ctx.beginPath();
-          let started = false, prevY = null;
+          let started = false, prevY = null, prevCol = basecol;
+          ctx.beginPath(); ctx.strokeStyle = prevCol;
           for (let i = range.from; i <= range.to && i < dataList.length; i++) {
             const v = result[i] && result[i][key];
             if (v == null || !Number.isFinite(v)) { started = false; continue; }
             const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
-            if (!started) { ctx.moveTo(x, y); started = true; }
+            const c = (cMap && cMap.get(dataList[i].timestamp)) || basecol;
+            if (c !== prevCol) { ctx.stroke(); ctx.beginPath(); ctx.strokeStyle = c; if (started) { ctx.moveTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y); prevCol = c; started = true; }
+            else if (!started) { ctx.moveTo(x, y); started = true; }
             else { ctx.lineTo(x, prevY); ctx.lineTo(x, y); }
             prevY = y;
           }
@@ -191,6 +197,8 @@ function renderPineModel(h, model) {
             const v = result[i] && result[i][key];
             if (v == null || !Number.isFinite(v)) continue;
             const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
+            const c = (cMap && cMap.get(dataList[i].timestamp)) || basecol;
+            ctx.fillStyle = c;
             ctx.beginPath();
             if (ls === "stepline_diamond") {
               ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
@@ -200,6 +208,38 @@ function renderPineModel(h, model) {
             ctx.fill();
           }
         }
+        // Default non-custom-draw: not reachable here (this block is inside customDraw guard)
+        ctx.restore();
+      });
+      return true;
+    };
+  }
+  // Per-bar color for normal line style (not custom draw): add a draw override
+  const hasPerBarColor = !customDraw && series.some((_, idx) => colorMaps[idx] && colorMaps[idx].size > 0);
+  if (hasPerBarColor) {
+    reg.draw = ({ ctx, chart, indicator, xAxis, yAxis }) => {
+      const dataList = chart.getDataList();
+      const range = chart.getVisibleRange();
+      const result = indicator.result || [];
+      const lw = stOpt.lineWidth || 1.5;
+      series.forEach((s, idx) => {
+        const basecol = stOpt.color || s.color || palette[idx % palette.length];
+        const cMap = colorMaps[idx];
+        if (!cMap || cMap.size === 0) return;
+        const key = "p" + idx;
+        ctx.save();
+        ctx.lineWidth = lw;
+        let started = false, prevCol = basecol;
+        ctx.beginPath(); ctx.strokeStyle = prevCol;
+        for (let i = range.from; i <= range.to && i < dataList.length; i++) {
+          const v = result[i] && result[i][key];
+          if (v == null || !Number.isFinite(v)) { started = false; continue; }
+          const x = xAxis.convertToPixel(i), y = yAxis.convertToPixel(v);
+          const c = cMap.get(dataList[i].timestamp) || basecol;
+          if (c !== prevCol) { ctx.stroke(); ctx.beginPath(); ctx.strokeStyle = c; ctx.moveTo(x, y); prevCol = c; started = true; }
+          else if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
         ctx.restore();
       });
       return true;

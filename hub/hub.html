@@ -172,8 +172,8 @@
 // Broker switch keeps the instrument (gold stays gold); engine switch keeps instrument, broker and timeframe.
 // Multi-pane: each pane has its own symbol+timeframe; pane 0 is the "main" one driven by the top bar.
 const ENGINES = [["vela", "Vela"], ["lightweight", "Lightweight"], ["klinechart", "KLineChart"]];
-const TFS = [["M1", "1m"], ["M5", "5m"], ["M15", "15m"], ["M30", "30m"], ["H1", "1H"], ["H2", "2H"], ["H4", "4H"], ["D1", "D"]];
-const SHORT = { arm: "RMT", bybit: "BYB", deriv: "DER", mt5: "MT5", binance: "BIN" };
+const TFS = [["M1", "1m"], ["M5", "5m"], ["M15", "15m"], ["M30", "30m"], ["H1", "1H"], ["H2", "2H"], ["H4", "4H"], ["D1", "D"], ["W1", "W"], ["MN1", "M"]];
+const SHORT = { arm: "RMT", bybit: "BYB", deriv: "DER", mt5: "MT5", binance: "BIN", fyers: "NSE" };
 const $ = (id) => document.getElementById(id);
 let DATA = { brokers: [], instruments: [] }, BY_TICKER = new Map(), status = {};
 let st = { engine: "vela", key: "XAUUSD", broker: "deriv", ticker: "frxXAUUSD", tf: "M1" };
@@ -516,7 +516,7 @@ function paintStatus() {
   const L = $("lights"); L.innerHTML = "";
   DATA.brokers.forEach((b) => { const s = status[b.id] || {}, x = document.createElement("span");
     x.innerHTML = `<span class="dot ${s.ok ? "ok" : "bad"}"></span>${SHORT[b.id]}`; x.title = `${b.name}: ${s.msg || ""}`; x.style.marginRight = "10px"; L.appendChild(x); });
-  if (openPanel === "feeds") renderFeeds();
+  if (openPanel === "feeds") updateFeedsStatus();
 }
 
 // ---- Dock panels (right side). Each panel is one render function; more plug in here later. ----
@@ -585,11 +585,92 @@ function renderSettings() {
   r.onclick = () => { HubSettingsSave({ ...HubSettingsLoad(), overrides: {} }); themeChanged(); }; ui.appendChild(r);
 }
 let openPanel = null;
-function renderFeeds() {
+function updateFeedsStatus() {
+  const d = $("dock");
+  const rows = d.querySelectorAll(".row[data-broker]");
+  rows.forEach((r) => {
+    const bId = r.dataset.broker, s = status[bId] || {};
+    const dot = r.querySelector(".dot");
+    if (dot) dot.className = "dot " + (s.ok ? "ok" : "bad");
+    if (r.children[1]) r.children[1].textContent = s.msg || "-";
+  });
+}
+async function renderFeeds() {
   const d = $("dock"); d.innerHTML = "<h3>Feeds</h3>";
-  DATA.brokers.forEach((b) => { const s = status[b.id] || {}, r = document.createElement("div"); r.className = "row";
+  DATA.brokers.forEach((b) => { const s = status[b.id] || {}, r = document.createElement("div"); r.className = "row"; r.dataset.broker = b.id;
     r.innerHTML = `<b><span class="dot ${s.ok ? "ok" : "bad"}"></span></b><span></span>`;
     r.children[0].append(b.name); r.children[1].textContent = s.msg || "-"; d.appendChild(r); });
+  // Fyers NSE setup / OAuth login
+  let fst = {};
+  try { fst = await (await fetch("/api/fyers/status")).json(); } catch (_) {}
+  if (openPanel !== "feeds") return;
+  const old = d.querySelector('[data-fy-box="1"]');
+  if (old) old.remove();
+  const box = document.createElement("div"); box.className = "set"; box.dataset.fyBox = "1";
+  box.innerHTML = `<h4>Fyers (NSE Equities &amp; Indices)</h4>
+    <div data-fy="st" style="font-size:11px;color:var(--dim);margin-bottom:6px">${fst.connected ? "Connected (" + (fst.symbols || 0) + " NSE symbols)" : (fst.configured ? "Credentials saved. Click Save &amp; Login to connect." : "Enter App ID &amp; Secret Key, then click Save &amp; Login.")}</div>
+    <label style="flex-direction:column;align-items:stretch;gap:3px">App ID<input data-fy="app" placeholder="e.g. XXXXXXXX-100" value="${esc(fst.app_id || "")}" style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:3px;padding:4px 6px;font:inherit"></label>
+    <label style="flex-direction:column;align-items:stretch;gap:3px">Secret Key<input data-fy="sec" type="password" placeholder="${fst.configured ? "(saved)" : "App Secret"}" style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:3px;padding:4px 6px;font:inherit"></label>
+    <label style="flex-direction:column;align-items:stretch;gap:3px">Redirect URL<input data-fy="red" value="${esc(fst.redirect_uri || "http://127.0.0.1:8502/")}" style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:3px;padding:4px 6px;font:inherit"></label>
+    <label style="flex-direction:column;align-items:stretch;gap:3px">Access Token / Auth Code (optional)<input data-fy="tok" placeholder="Paste token or leave blank for Login" style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:3px;padding:4px 6px;font:inherit"></label>
+    <div style="display:flex;gap:6px;margin-top:8px"><button class="btn primary" data-fy="login">Save &amp; Login</button><button class="btn" data-fy="save">Save</button></div>
+    <div data-fy="msg" style="font-size:11px;margin-top:6px;color:var(--dim)"></div>`;
+  d.appendChild(box);
+  const msg = box.querySelector('[data-fy="msg"]');
+  const stLine = box.querySelector('[data-fy="st"]');
+  const saveCfg = async () => {
+    try {
+      const body = {
+        app_id: box.querySelector('[data-fy="app"]').value.trim(),
+        secret_key: box.querySelector('[data-fy="sec"]').value.trim(),
+        redirect_uri: box.querySelector('[data-fy="red"]').value.trim(),
+      };
+      const tok = box.querySelector('[data-fy="tok"]').value.trim();
+      if (tok) {
+        if (tok.includes("auth_code=") || tok.length < 80) body.auth_code = tok;
+        else body.access_token = tok;
+      }
+      const res = await fetch("/api/fyers/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const r = await res.json();
+      if (!res.ok || !r.ok) { msg.style.color = "var(--bad)"; msg.textContent = r.error || ("Save failed (HTTP " + res.status + ")"); return false; }
+      msg.style.color = "var(--ok)";
+      msg.textContent = r.connected ? "Connected!" : (r.configured ? "Saved! Click Save & Login to authenticate." : "Saved.");
+      stLine.textContent = r.connected ? "Connected (" + (r.symbols || 0) + " NSE symbols)" : (r.configured ? "Credentials saved. Click Save & Login to connect." : "Enter App ID & Secret Key, then click Save & Login.");
+      if (r.configured) box.querySelector('[data-fy="sec"]').placeholder = "(saved)";
+      pollStatus();
+      return true;
+    } catch (e) {
+      msg.style.color = "var(--bad)";
+      msg.textContent = "Save failed: " + (e.message || e);
+      return false;
+    }
+  };
+  box.querySelector('[data-fy="save"]').onclick = saveCfg;
+  box.querySelector('[data-fy="login"]').onclick = async () => {
+    if (!(await saveCfg())) return;
+    try {
+      const res = await fetch("/api/fyers/login");
+      const r = await res.json();
+      if (!res.ok || !r.ok) { msg.style.color = "var(--bad)"; msg.textContent = r.error || "Login failed"; return; }
+      window.open(r.auth_url, "_blank");
+      msg.style.color = "var(--dim)"; msg.textContent = "Complete login in the Fyers tab...";
+      const poll = setInterval(async () => {
+        try {
+          const s = await (await fetch("/api/fyers/status")).json();
+          if (s.connected) {
+            clearInterval(poll);
+            msg.style.color = "var(--ok)"; msg.textContent = "Fyers connected!";
+            stLine.textContent = "Connected (" + (s.symbols || 0) + " NSE symbols)";
+            pollStatus();
+          }
+        } catch (_) {}
+      }, 1500);
+      setTimeout(() => clearInterval(poll), 120000);
+    } catch (e) {
+      msg.style.color = "var(--bad)";
+      msg.textContent = "Login failed: " + (e.message || e);
+    }
+  };
 }
 function openPanelByName(name) {
   openPanel = name;

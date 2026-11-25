@@ -10,6 +10,7 @@
   #chart{position:absolute;left:0;right:0;bottom:0}
   #title{font-weight:600;margin-right:8px}
   #pineLegend{position:absolute;top:8px;left:10px;z-index:15;display:flex;flex-wrap:wrap;gap:6px;pointer-events:none}
+  #watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:44px;font-weight:700;letter-spacing:.04em;color:#d6dee5;opacity:.05;pointer-events:none;z-index:1;user-select:none}
   .pine-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;background:rgba(15,22,29,.82);color:#d6dee5;border:1px solid #2b3946;border-radius:4px;padding:2px 7px;font-size:12px}
   .pine-pill button{background:none;border:0;color:#93a2af;cursor:pointer;padding:0 2px;font-size:12px;line-height:1}
   .pine-pill button:hover{color:#5fb3e0}
@@ -18,7 +19,8 @@
   <span id="title">Lightweight Charts 5.2.1</span>
   <select id="sym"></select>
   <span id="tfs"></span><span class="sep"></span>
-  <select id="style"><option value="candles">Candles</option><option value="bars">Bars</option><option value="line">Line</option><option value="area">Area</option></select>
+  <select id="style"><option value="candles">Candles</option><option value="hollow">Hollow Candles</option><option value="heikinashi">Heikin-Ashi</option><option value="bars">Bars</option><option value="line">Line</option><option value="area">Area</option><option value="baseline">Baseline</option></select>
+  <button id="scaleAuto" class="on" title="Auto-fit price scale">A</button><button id="scaleLog" title="Logarithmic price scale">L</button><button id="scalePct" title="Percentage price scale">%</button>
   <span class="sep"></span>
   <button data-quick="">Cursor</button><button data-quick="trend-line">Trend</button><button data-quick="horizontal-line">H-line</button><button data-quick="rectangle">Rect</button><button data-quick="fib-retracement">Fib</button>
   <select id="alltools"><option value="">All 86 tools...</option></select>
@@ -29,7 +31,7 @@
   <span class="sep"></span>
   <button id="auto">Code trendline</button><button id="clear">Clear drawings</button>
 </div>
-<div id="chart"></div>
+<div id="chart"><div id="watermark"></div></div>
 <div id="pineLegend"></div>
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="vendor/lightweight-charts-drawing.umd.js"></script>
@@ -51,20 +53,39 @@ const chart = LC.createChart(host, {
   crosshair: { mode: LC.CrosshairMode.Normal },
 });
 
-let lwPrefs = { style: "candles", ema: true, vol: true, rsi: true };
+let lwPrefs = { style: "candles", ema: true, vol: true, rsi: true, scaleMode: "normal", autoScale: true };
 try { Object.assign(lwPrefs, JSON.parse(localStorage.getItem("lwPrefs") || "{}")); } catch (_) {}
 const saveLwPrefs = () => { try { localStorage.setItem("lwPrefs", JSON.stringify(lwPrefs)); } catch (_) {} };
-let sym = LabDefaultSymbol, tf = LabDefaultTF, style = lwPrefs.style, bars = [], stop = null, loadingOlder = false;
+let sym = LabDefaultSymbol, tf = LabDefaultTF, style = lwPrefs.style, bars = [], haBars = [], stop = null, loadingOlder = false;
+if (!["candles", "hollow", "heikinashi", "bars", "line", "area", "baseline"].includes(style)) style = "candles";
 document.getElementById("style").value = style;
 ["ema", "vol", "rsi"].forEach((id) => { document.getElementById(id).checked = lwPrefs[id] !== false; });
 let price, volS, rsiS, emaS = [], drawings;
 
+function applyScalePrefs() {
+  const modeMap = { normal: LC.PriceScaleMode.Normal, log: LC.PriceScaleMode.Logarithmic, pct: LC.PriceScaleMode.Percentage };
+  chart.priceScale("right").applyOptions({
+    mode: modeMap[lwPrefs.scaleMode] ?? LC.PriceScaleMode.Normal,
+    autoScale: lwPrefs.autoScale !== false,
+  });
+  document.getElementById("scaleAuto").classList.toggle("on", lwPrefs.autoScale !== false);
+  document.getElementById("scaleLog").classList.toggle("on", lwPrefs.scaleMode === "log");
+  document.getElementById("scalePct").classList.toggle("on", lwPrefs.scaleMode === "pct");
+}
+applyScalePrefs();
+
 function makePrice() {
   if (price) chart.removeSeries(price);
-  const opts = { candles: [LC.CandlestickSeries, { upColor: HubTheme.up, downColor: HubTheme.down, borderVisible: false, wickUpColor: HubTheme.up, wickDownColor: HubTheme.down }],
+  const baseVal = bars.length ? bars[0].close : 0;
+  const opts = {
+    candles: [LC.CandlestickSeries, { upColor: HubTheme.up, downColor: HubTheme.down, borderVisible: false, wickUpColor: HubTheme.up, wickDownColor: HubTheme.down }],
+    hollow: [LC.CandlestickSeries, { upColor: "transparent", downColor: HubTheme.down, borderVisible: true, borderUpColor: HubTheme.up, borderDownColor: HubTheme.down, wickUpColor: HubTheme.up, wickDownColor: HubTheme.down }],
+    heikinashi: [LC.CandlestickSeries, { upColor: HubTheme.up, downColor: HubTheme.down, borderVisible: false, wickUpColor: HubTheme.up, wickDownColor: HubTheme.down }],
     bars: [LC.BarSeries, { upColor: HubTheme.up, downColor: HubTheme.down }],
     line: [LC.LineSeries, { color: HubTheme.accent, lineWidth: 2 }],
-    area: [LC.AreaSeries, { lineColor: HubTheme.accent, topColor: HubTheme.upVol, bottomColor: "rgba(0,0,0,0)" }] }[style];
+    area: [LC.AreaSeries, { lineColor: HubTheme.accent, topColor: HubTheme.upVol, bottomColor: "rgba(0,0,0,0)" }],
+    baseline: [LC.BaselineSeries, { baseValue: { type: "price", price: baseVal }, topLineColor: HubTheme.up, topFillColor1: toRgba(HubTheme.up, 0.25), topFillColor2: toRgba(HubTheme.up, 0.02), bottomLineColor: HubTheme.down, bottomFillColor1: toRgba(HubTheme.down, 0.02), bottomFillColor2: toRgba(HubTheme.down, 0.25), lineWidth: 2 }],
+  }[style];
   price = chart.addSeries(opts[0], opts[1], 0);
   const saved = drawings ? drawings.exportJSON() : null;
   if (drawings) drawings.destroy();
@@ -85,9 +106,32 @@ function rsi(vals, n = 14) {
   }
   return out;
 }
-function priceData(b) { return style === "line" || style === "area" ? { time: b.time, value: b.close } : b; }
+function computeHaBars(src) {
+  const out = [];
+  for (let i = 0; i < src.length; i++) {
+    const b = src[i], close = (b.open + b.high + b.low + b.close) / 4;
+    const open = i === 0 ? (b.open + b.close) / 2 : (out[i - 1].open + out[i - 1].close) / 2;
+    out.push({ time: b.time, open, high: Math.max(b.high, open, close), low: Math.min(b.low, open, close), close });
+  }
+  return out;
+}
+function priceData(b) {
+  if (style === "line" || style === "area" || style === "baseline") return { time: b.time, value: b.close };
+  return b;
+}
+function updateWatermark() {
+  const wm = document.getElementById("watermark");
+  if (wm) { wm.textContent = `${sym} · ${tf}`; wm.style.color = HubTheme.text || "#d6dee5"; }
+}
 function paintAll() {
-  price.setData(bars.map(priceData));
+  updateWatermark();
+  if (style === "baseline" && bars.length) price.applyOptions({ baseValue: { type: "price", price: bars[0].close } });
+  if (style === "heikinashi") {
+    haBars = computeHaBars(bars);
+    price.setData(haBars);
+  } else {
+    price.setData(bars.map(priceData));
+  }
   // Decimals as the broker quotes them (symbol digits); guess only when the broker gave none.
   const info = LabSymbols.find((x) => x.ticker === sym);
   const prec = info && info.digits != null ? info.digits : (bars.length && bars[bars.length - 1].close < 10 ? 4 : 2);
@@ -131,7 +175,16 @@ async function load() {
     if (last && b.time < last.time) return;
     const isNew = !last || b.time > last.time;
     if (isNew) bars.push(b); else bars[bars.length - 1] = b;
-    price.update(priceData(b));
+    if (style === "heikinashi") {
+      const prev = isNew ? haBars[haBars.length - 1] : haBars[haBars.length - 2];
+      const close = (b.open + b.high + b.low + b.close) / 4;
+      const open = prev ? (prev.open + prev.close) / 2 : (b.open + b.close) / 2;
+      const ha = { time: b.time, open, high: Math.max(b.high, open, close), low: Math.min(b.low, open, close), close };
+      if (isNew) haBars.push(ha); else haBars[haBars.length - 1] = ha;
+      price.update(ha);
+    } else {
+      price.update(priceData(b));
+    }
     if (volS) volS.update({ time: b.time, value: b.volume, color: b.close >= b.open ? HubTheme.upVol : HubTheme.downVol });
     if (isNew || Date.now() - lastRepaint > 2000) { lastRepaint = Date.now(); if (isNew) paintAll(); notifyPineBars(); }
   }, srcOf(sym));
@@ -150,11 +203,11 @@ chart.timeScale().subscribeVisibleLogicalRangeChange(async (r) => {
 // ---- controls ----
 const symSel = document.getElementById("sym");
 // Remote MT5 groups first, then Bybit, then the Deriv backup feed, then Binance crypto. Stock lists over 500 stay out of this menu (Vela/KLineChart search them).
-["arm-metal", "arm-crypto", "arm-forex", "arm-index", "arm-energy", "arm-other", "arm-stock", "bybit-metal", "bybit-perp", "bybit-spot", "bybit-futures", "bybit-inverse", "bybit-mark", "bybit-index", "commodity", "forex", "indices", "crypto"].forEach((g) => {
+["arm-metal", "arm-crypto", "arm-forex", "arm-index", "arm-energy", "arm-other", "arm-stock", "bybit-metal", "bybit-perp", "bybit-spot", "bybit-futures", "bybit-inverse", "bybit-mark", "bybit-index", "nse-index", "nse-eq", "commodity", "forex", "indices", "crypto"].forEach((g) => {
   // Very long lists are cut to the 150 most traded here; Vela and KLineChart search every symbol.
   if (g === "arm-stock" && LabSymbols.filter((s) => s.group === g).length > 500) return;
-  const list = LabSymbols.filter((s) => s.group === g).slice(0, g.startsWith("bybit") ? 150 : undefined); if (!list.length) return;
-  const og = document.createElement("optgroup"); og.label = { "arm-metal": "Remote MT5 - Metals", "arm-forex": "Remote MT5 - Forex", "arm-index": "Remote MT5 - Indices", "arm-other": "Remote MT5 - Other", "arm-crypto": "Remote MT5 - Crypto", "arm-energy": "Remote MT5 - Energies", "arm-stock": "Remote MT5 - Stocks", "bybit-metal": "Bybit - Gold & Metals", "bybit-perp": "Bybit - USDT Perpetuals", "bybit-spot": "Bybit - Spot", "bybit-futures": "Bybit - Dated Futures", "bybit-inverse": "Bybit - Inverse (coin margined)", "bybit-mark": "Bybit - Mark Price", "bybit-index": "Bybit - Index Price", forex: "Deriv/MT5 - Forex", commodity: "Deriv/MT5 - Commodities", crypto: "Crypto", indices: "Deriv - Indices" }[g];
+  const list = LabSymbols.filter((s) => s.group === g).slice(0, g.startsWith("bybit") || g === "nse-eq" ? 150 : undefined); if (!list.length) return;
+  const og = document.createElement("optgroup"); og.label = { "arm-metal": "Remote MT5 - Metals", "arm-forex": "Remote MT5 - Forex", "arm-index": "Remote MT5 - Indices", "arm-other": "Remote MT5 - Other", "arm-crypto": "Remote MT5 - Crypto", "arm-energy": "Remote MT5 - Energies", "arm-stock": "Remote MT5 - Stocks", "bybit-metal": "Bybit - Gold & Metals", "bybit-perp": "Bybit - USDT Perpetuals", "bybit-spot": "Bybit - Spot", "bybit-futures": "Bybit - Dated Futures", "bybit-inverse": "Bybit - Inverse (coin margined)", "bybit-mark": "Bybit - Mark Price", "bybit-index": "Bybit - Index Price", "nse-index": "NSE - Indices", "nse-eq": "NSE - Equities", forex: "Deriv/MT5 - Forex", commodity: "Deriv/MT5 - Commodities", crypto: "Crypto", indices: "Deriv - Indices" }[g];
   list.forEach((s) => og.appendChild(new Option(`${s.ticker}  ${s.name}`, s.ticker))); symSel.appendChild(og);
 });
 symSel.value = sym;
@@ -163,6 +216,9 @@ const tfBox = document.getElementById("tfs");
 LabTF.list.forEach((t) => { const b = document.createElement("button"); b.textContent = t; b.dataset.tf = t; b.onclick = () => { tf = t; markTF(); LabNotify(sym, tf); load(); }; tfBox.appendChild(b); });
 function markTF() { tfBox.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.tf === tf)); }
 document.getElementById("style").onchange = (e) => { style = e.target.value; lwPrefs.style = style; saveLwPrefs(); makePrice(); paintAll(); };
+document.getElementById("scaleAuto").onclick = () => { lwPrefs.autoScale = !(lwPrefs.autoScale !== false); saveLwPrefs(); applyScalePrefs(); };
+document.getElementById("scaleLog").onclick = () => { lwPrefs.scaleMode = lwPrefs.scaleMode === "log" ? "normal" : "log"; saveLwPrefs(); applyScalePrefs(); };
+document.getElementById("scalePct").onclick = () => { lwPrefs.scaleMode = lwPrefs.scaleMode === "pct" ? "normal" : "pct"; saveLwPrefs(); applyScalePrefs(); };
 ["ema", "vol", "rsi"].forEach((id) => (document.getElementById(id).onchange = (e) => { lwPrefs[id] = e.target.checked; saveLwPrefs(); paintAll(); }));
 
 const all = document.getElementById("alltools");
@@ -218,10 +274,25 @@ function pineSeriesData(points, withBreaks) {
     if (!p || p.time == null) continue;
     const t = Math.floor(p.time / 1000);
     const valid = p.value != null && Number.isFinite(p.value);
-    if (valid) byTime.set(t, { time: t, value: p.value });
-    else if (withBreaks && !byTime.has(t)) byTime.set(t, { time: t });
+    if (valid) {
+      const d = { time: t, value: p.value };
+      if (p.color) d.color = p.color;
+      byTime.set(t, d);
+    } else if (withBreaks && !byTime.has(t)) {
+      byTime.set(t, { time: t });
+    }
   }
   return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+}
+function _hasPerPointColor(points) {
+  if (!points || points.length < 2) return false;
+  let first = null;
+  for (const p of points) {
+    if (!p || !p.color) continue;
+    if (!first) { first = p.color; continue; }
+    if (p.color !== first) return true;
+  }
+  return false;
 }
 function renderPineModel(h, model) {
   h.model = model;
@@ -234,14 +305,47 @@ function renderPineModel(h, model) {
   const ls = stOpt.lineStyle || "default";
   const withBreaks = ls === "line_breaks" || ls === "stepline_breaks";
   list.forEach((s, idx) => {
+    const perPoint = !stOpt.color && _hasPerPointColor(s.points);
     const col = stOpt.color || s.color || palette[idx % palette.length];
     const lw = stOpt.lineWidth || s.lineWidth || 1.5;
     const pIdx = idx === 0 ? paneIdx : (overlay ? 0 : (chart.panes ? chart.panes().length - 1 : paneIdx));
+    const data = pineSeriesData(s.points, withBreaks);
     let ser;
     if (ls === "histogram" || ls === "columns" || (ls === "default" && (s.type === "histogram" || s.type === "columns"))) {
       ser = chart.addSeries(LC.HistogramSeries, { color: col, priceLineVisible: false }, pIdx);
     } else if (ls === "area") {
       ser = chart.addSeries(LC.AreaSeries, { lineColor: col, lineWidth: lw, topColor: toRgba(col, 0.27), bottomColor: toRgba(col, 0), priceLineVisible: false }, pIdx);
+    } else if (perPoint) {
+      // Per-bar coloring (e.g. Supertrend red/green): split into color-segments so each segment
+      // draws as a continuous line in its own colour. LC LineSeries per-point color only colours the
+      // marker, not the line between points; drawing separate series per segment does both.
+      const segments = [];
+      let cur = null;
+      for (const d of data) {
+        const c = d.color || col;
+        if (!cur || cur.color !== c) {
+          // overlap: repeat the last point of the previous segment so lines join without a gap
+          if (cur && cur.pts.length) {
+            const overlap = { ...cur.pts[cur.pts.length - 1] };
+            cur = { color: c, pts: [overlap] };
+          } else {
+            cur = { color: c, pts: [] };
+          }
+          segments.push(cur);
+        }
+        cur.pts.push(d);
+      }
+      segments.forEach((seg) => {
+        if (!seg.pts.length) return;
+        const opts = { color: seg.color, lineWidth: lw, priceLineVisible: false, lastValueVisible: false };
+        if (ls === "stepline" || ls === "stepline_breaks" || ls === "stepline_diamond") opts.lineType = LC.LineType ? LC.LineType.WithSteps : 1;
+        const segSer = chart.addSeries(LC.LineSeries, opts, pIdx);
+        segSer.setData(seg.pts.map((p) => ({ time: p.time, value: p.value })));
+        h.series.push(segSer);
+      });
+      // show last value on the final segment
+      if (h.series.length) h.series[h.series.length - 1].applyOptions({ lastValueVisible: true });
+      return; // skip the normal ser.setData below
     } else {
       const opts = { color: col, lineWidth: lw, priceLineVisible: false, lastValueVisible: true };
       if (ls === "stepline" || ls === "stepline_breaks" || ls === "stepline_diamond") opts.lineType = LC.LineType ? LC.LineType.WithSteps : 1;
@@ -249,7 +353,7 @@ function renderPineModel(h, model) {
       if (ls === "circles") { opts.lineVisible = false; opts.pointMarkersVisible = true; opts.pointMarkersRadius = Math.max(3, lw + 1); }
       ser = chart.addSeries(LC.LineSeries, opts, pIdx);
     }
-    ser.setData(pineSeriesData(s.points, withBreaks));
+    ser.setData(data);
     h.series.push(ser);
   });
 }

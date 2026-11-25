@@ -101,14 +101,21 @@ window.LabSymbols = (() => {
     return [{ ticker: "BTCUSD", name: "Bitcoin", source: "binance", group: "crypto" }];
   }
 })();
-window.srcOf = (t) => { const s = LabSymbols.find((x) => x.ticker === t); return s ? s.source : "binance"; };
+window.srcOf = (t) => {
+  const s = LabSymbols.find((x) => x.ticker === t || x.ticker.split(":").pop() === t);
+  if (s) return s.source;
+  if (/^NSE:|-EQ$|-INDEX$/i.test(t)) return "fyers";
+  if (/^BYBIT_/i.test(t)) return "bybit";
+  if (/^RMT_/i.test(t)) return "arm";
+  return "binance";
+};
 window.LabDefaultSymbol = (LabSymbols.find((s) => s.ticker === "RMT_XAUUSD") || LabSymbols.find((s) => s.ticker === "frxXAUUSD") || LabSymbols.find((s) => /^XAUUSD/.test(s.ticker) && s.source === "mt5") || LabSymbols.find((s) => s.ticker === "BTCUSD")).ticker;
 
 // TradeX: the shell opens a page as hub-frame with ?symbol=&tf=&embed=1, sends {cmd:"set"} to switch,
 // and the page reports user changes back with LabNotify (only when embedded).
 window.LabParams = new URLSearchParams(location.search);
 if (LabParams.get("symbol") && LabSymbols.some((s) => s.ticker === LabParams.get("symbol"))) window.LabDefaultSymbol = LabParams.get("symbol");
-window.LabDefaultTF = ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1"].includes(LabParams.get("tf")) ? LabParams.get("tf") : "M1";
+window.LabDefaultTF = ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1", "W1", "MN1"].includes(LabParams.get("tf")) ? LabParams.get("tf") : "M1";
 window.LabNotify = (symbol, tf) => { if (LabEmbedded) window.parent.postMessage({ evt: "market", symbol, tf }, location.origin); };
 window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || !e.data || !window.labChart) return;
@@ -132,26 +139,36 @@ window.addEventListener("message", (e) => {
 
 // Timeframe helpers shared by the pages.
 window.LabTF = {
-  list: ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1"],
-  sec: { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H2: 7200, H4: 14400, D1: 86400 },
-  // Turn anything like "1", "60", "240", "1D", "1h", "15m" into our code.
+  list: ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1", "W1", "MN1"],
+  sec: { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H2: 7200, H4: 14400, D1: 86400, W1: 604800, MN1: 2592000 },
+  // Turn anything like "1", "60", "240", "1D", "1W", "1M", "1h", "15m" into our code.
   fromAny(v) {
     const s = String(v).trim();
+    if (/^(MN1?|1M|M)$/i.test(s) && s !== "1m" && s !== "m") return "MN1";
+    if (/^(W1?|1W)$/i.test(s)) return "W1";
     const m = s.match(/^(\d*)\s*([smhdwSMHDW]?)$/);
     if (!m) return "M1";
+    if (m[2] === "M") return "MN1";
     const n = parseInt(m[1] || "1", 10), u = m[2].toLowerCase();
     const minutes = u === "h" ? n * 60 : u === "d" ? n * 1440 : u === "w" ? n * 10080 : u === "s" ? 1 : n;
-    const map = { 1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 120: "H2", 240: "H4", 1440: "D1" };
+    const map = { 1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 120: "H2", 240: "H4", 1440: "D1", 10080: "W1" };
     return map[minutes] || "M1";
   },
   toPine(t) {
-    return { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D" }[t] || "1";
+    return { M1: "1", M5: "5", M15: "15", M30: "30", H1: "60", H2: "120", H4: "240", D1: "1D", W1: "1W", MN1: "1M" }[t] || "1";
   },
 };
 
 window.LabPineSeries = async function (defaultSym, s, tfArg, range = {}) {
   const [raw, mod] = String(s || defaultSym).replace(/^lab:/, "").split(";");
-  const sym = raw || defaultSym;
+  let sym = raw || defaultSym;
+  if (raw && !LabSymbols.some((x) => x.ticker === raw)) {
+    if (defaultSym && defaultSym.split(":").pop() === raw) sym = defaultSym;
+    else {
+      const m = LabSymbols.find((x) => x.ticker.split(":").pop() === raw);
+      if (m) sym = m.ticker;
+    }
+  }
   const tf = LabTF.fromAny(tfArg || "1");
   const limit = range.limit || 1000;
   const src = window.srcOf ? window.srcOf(sym) : "binance";

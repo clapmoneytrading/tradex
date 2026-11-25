@@ -36,7 +36,7 @@ def load_env(path):
 
 load_env(os.path.join(HERE, "..", ".env"))
 load_env(os.path.join(HERE, ".env"))
-import logbus, feedlog
+import logbus, feedlog, fyers_feed
 
 HTTP_PORT = int(os.environ.get("HUB_HTTP_PORT", "8770"))
 WS_PORT = int(os.environ.get("HUB_WS_PORT", "8765"))
@@ -46,8 +46,8 @@ REMOTE_SSH_HOST = os.environ.get("REMOTE_MT5_SSH_HOST", "").strip()   # an alias
 REMOTE_RESTART_CMD = os.environ.get("REMOTE_MT5_RESTART_CMD", "").strip()  # optional command run over SSH by the Restart button
 REMOTE_ON = bool(REMOTE_SSH_HOST)
 CACHE_DIR = os.path.join(HERE, ".cache")
-TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "D1": 86400}
-BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H2": "2h", "H4": "4h", "D1": "1d"}
+TF_SEC = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H2": 7200, "H4": 14400, "D1": 86400, "W1": 604800, "MN1": 2592000}
+BINANCE_TF = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H2": "2h", "H4": "4h", "D1": "1d", "W1": "1w", "MN1": "1M"}
 BINANCE_SYM = {"XAUUSD": "PAXGUSDT"}  # gold token; any other XXXUSD maps to XXXUSDT
 
 def bsym_of(symbol):
@@ -368,7 +368,7 @@ async def stream_binance(ws, symbol, tf):
 # Suffix .MARK / .INDEX = mark-price / index-price candles (linear and inverse only).
 BYBIT_REST = "https://api.bybit.com"
 BYBIT_WS = "wss://stream.bybit.com/v5/public/"
-BYBIT_TF = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "H2": "120", "H4": "240", "D1": "D"}
+BYBIT_TF = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "H2": "120", "H4": "240", "D1": "D", "W1": "W", "MN1": "M"}
 BYBIT_METAL = ("XAU", "XAG", "XPT", "XPD", "PAXG")
 bybit_symbols_cache = []
 
@@ -623,7 +623,38 @@ def _deriv_bars(r):
     return [{"time": int(c["epoch"]), "open": float(c["open"]), "high": float(c["high"]), "low": float(c["low"]),
              "close": float(c["close"]), "volume": 0.0} for c in r.get("candles") or []]
 
+def _agg_bars(bars, tf):
+    """Aggregate Daily bars into Weekly (W1) or Monthly (MN1) bars."""
+    from datetime import datetime, timezone
+    out = []
+    cur_key = None
+    for b in bars:
+        dt = datetime.fromtimestamp(int(b["time"]), tz=timezone.utc)
+        if tf == "W1":
+            # Monday 00:00 UTC of that week
+            monday = dt.toordinal() - dt.weekday()
+            b_ts = int(datetime.fromordinal(monday).replace(tzinfo=timezone.utc).timestamp())
+            key = monday
+        else:
+            b_ts = int(datetime(dt.year, dt.month, 1, tzinfo=timezone.utc).timestamp())
+            key = (dt.year, dt.month)
+        if key != cur_key:
+            cur_key = key
+            out.append({"time": b_ts, "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "volume": b.get("volume", 0.0)})
+        else:
+            c = out[-1]
+            c["high"] = max(c["high"], b["high"])
+            c["low"] = min(c["low"], b["low"])
+            c["close"] = b["close"]
+            c["volume"] += b.get("volume", 0.0)
+    return out
+
+
 def deriv_history(symbol, tf, limit=HISTORY, to_ms=None):
+    if tf in ("W1", "MN1"):
+        mult = 7 if tf == "W1" else 31
+        daily = deriv_history(symbol, "D1", min(5000, int(limit) * mult), to_ms)
+        return _agg_bars(daily, tf)[-int(limit):]
     limit, g = int(limit), DERIV_GRAN[tf]
     if limit <= 1000:
         return _deriv_bars(deriv_request({"ticks_history": symbol, "style": "candles", "granularity": g, "count": limit,
@@ -690,7 +721,7 @@ async def stream_deriv(ws, symbol, tf):
                         continue
                     p, ts = float(t["quote"]), int(t["epoch"])
                     lag = record_tick("deriv", symbol, ts * 1000)
-                    start = ts - ts % span
+                    start = ts - ts % span if tf not in ("W1", "MN1") else (cur["time"] if cur else ts - ts % 86400)
                     if not cur or start > cur["time"]:
                         cur = {"time": start, "open": p, "high": p, "low": p, "close": p, "volume": 0.0}
                     else:
@@ -702,6 +733,9 @@ async def stream_deriv(ws, symbol, tf):
         except Exception as e:
             await ws.send(json.dumps({"type": "status", "msg": f"Deriv reconnecting: {e}"}))
         await asyncio.sleep(60)
+
+async def stream_fyers(ws, symbol, tf):
+    await fyers_feed.stream(ws, symbol, tf, record_tick, true_now_ms)
 
 # ---------------- WebSocket hub ----------------
 async def handler(ws):
@@ -715,7 +749,7 @@ async def handler(ws):
             if tf not in TF_SEC:
                 await ws.send(json.dumps({"type": "error", "msg": f"Unknown timeframe {tf}"}))
                 continue
-            fn = {"mt5": stream_mt5, "deriv": stream_deriv, "arm": stream_arm, "bybit": stream_bybit}.get(src, stream_binance)
+            fn = {"mt5": stream_mt5, "deriv": stream_deriv, "arm": stream_arm, "bybit": stream_bybit, "fyers": stream_fyers}.get(src, stream_binance)
             task = feedlog.start_stream(fn, ws, src if fn is not stream_binance else "binance", sym, tf)
     except websockets.ConnectionClosed:
         pass
@@ -804,7 +838,7 @@ def mt5_history(symbol, tf, limit=HISTORY, to_ms=None):
 # ---------------- Instrument map (TradeX: switch broker, stay on the same instrument) ----------------
 # One instrument = the same underlying market at several brokers. Only exact matches are joined:
 # gold tokens (PAXG, XAUT) are NOT gold spot, so they stay separate instruments.
-BROKERS = [("deriv", "Deriv"), ("bybit", "Bybit"), ("binance", "Binance")] + ([("arm", "Remote MT5")] if REMOTE_ON else []) + ([("mt5", "Local MT5")] if LOCAL_MT5 else [])
+BROKERS = [("deriv", "Deriv"), ("bybit", "Bybit"), ("binance", "Binance"), ("fyers", "Fyers NSE")] + ([("arm", "Remote MT5")] if REMOTE_ON else []) + ([("mt5", "Local MT5")] if LOCAL_MT5 else [])
 DERIV_INDEX = {"OTC_NDX": "USTEC", "OTC_DJI": "US30", "OTC_SPC": "US500", "OTC_FTSE": "UK100", "OTC_GDAXI": "DE30",
                "OTC_FCHI": "FR40", "OTC_N225": "JP225", "OTC_HSI": "HK50", "OTC_AS51": "AUS200", "OTC_SX5E": "STOXX50"}
 def variant_rank(label):
@@ -829,6 +863,12 @@ def instrument_key(s):
         return t, None
     if src == "binance":
         return t, None
+    if src == "fyers":
+        base = t.split(":", 1)[-1]
+        for suf in ("-INDEX", "-EQ"):
+            if base.endswith(suf):
+                base = base[:-len(suf)]
+        return base, ("index" if t.endswith("-INDEX") else "NSE")
     if src == "bybit":
         cat, sym, kind = bybit_parse(t)
         if "-" in sym and kind != "trade":
@@ -850,7 +890,7 @@ def instrument_key(s):
     return None, None
 
 def build_instruments():
-    syms = arm_symbols_cache + deriv_symbols_cache + bybit_symbols_cache + mt5_symbol_list()[0] + \
+    syms = arm_symbols_cache + deriv_symbols_cache + bybit_symbols_cache + fyers_feed.symbols_cache + mt5_symbol_list()[0] + \
         [{"ticker": t, "name": n, "source": "binance", "group": "crypto"} for t, n in CRYPTO]
     if _instr_cache["n"] == len(syms):
         return _instr_cache["data"]
@@ -887,6 +927,8 @@ def feed_status():
     data = {"deriv": {"ok": bool(deriv_symbols_cache), "msg": f"{len(deriv_symbols_cache)} symbols"},
             "bybit": {"ok": bool(bybit_symbols_cache), "msg": f"{len(bybit_symbols_cache)} charts"},
             "binance": {"ok": True, "msg": "public feed"}}
+    fst = fyers_feed.status()
+    data["fyers"] = {"ok": fst["connected"], "msg": f"{fst['symbols']} NSE symbols" if fst["connected"] else (fst["last_err"] or "not connected (open Feeds to login)")}
     if REMOTE_ON:
         try:
             h = arm_get("/health", timeout=3)
@@ -946,7 +988,7 @@ def cached_bars(source, symbol, tf, limit=HISTORY, to_ms=None):
             if hit:
                 return hit[1]
     try:
-        fn = {"mt5": mt5_history, "deriv": deriv_history, "arm": arm_history, "bybit": bybit_history}.get(src, binance_history)
+        fn = {"mt5": mt5_history, "deriv": deriv_history, "arm": arm_history, "bybit": bybit_history, "fyers": fyers_feed.history}.get(src, binance_history)
         bars = fn(symbol, tf, lim, to_ms)
         with _bars_lock:
             if len(_bars_cache) > 256:
@@ -970,8 +1012,15 @@ class LabHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/symbols"):
             crypto = [{"ticker": t, "name": n, "source": "binance", "group": "crypto"} for t, n in CRYPTO]
             mt5_list, err = mt5_symbol_list()
-            return self._json({"symbols": arm_symbols_cache + bybit_symbols_cache + deriv_symbols_cache + mt5_list + crypto, "mt5": err or "ok", "arm": arm_status["msg"],
-                               "deriv": len(deriv_symbols_cache), "bybit": len(bybit_symbols_cache), "ws_port": WS_PORT}, 200)
+            return self._json({"symbols": arm_symbols_cache + bybit_symbols_cache + deriv_symbols_cache + fyers_feed.symbols_cache + mt5_list + crypto, "mt5": err or "ok", "arm": arm_status["msg"],
+                               "deriv": len(deriv_symbols_cache), "bybit": len(bybit_symbols_cache), "fyers": len(fyers_feed.symbols_cache), "ws_port": WS_PORT}, 200)
+        if self.path.startswith("/api/fyers/status"):
+            return self._json(fyers_feed.status(), 200)
+        if self.path.startswith("/api/fyers/login"):
+            try:
+                return self._json({"ok": True, "auth_url": fyers_feed.login_url()}, 200)
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
         if self.path.startswith("/api/restart"):
             return self._json(restart_state, 200)
         if self.path.startswith("/api/logs"):
@@ -1076,7 +1125,7 @@ class LabHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         """Only /api/restart (Restart button) and /api/logs/journal (log panel).
         Same-origin JSON only, so another web page open in the browser cannot act through this local server."""
-        if not self.path.startswith(("/api/restart", "/api/logs/journal")):
+        if not self.path.startswith(("/api/restart", "/api/logs/journal", "/api/fyers/config")):
             return self._json({"error": "not found"}, 404)
         origin = self.headers.get("Origin", "")
         if origin and origin not in (f"http://localhost:{HTTP_PORT}", f"http://127.0.0.1:{HTTP_PORT}"):
@@ -1089,6 +1138,21 @@ class LabHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/logs/journal"):
             self.rfile.read(n)
             return self._json({"ok": True}, 200)
+        if self.path.startswith("/api/fyers/config"):
+            body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            try:
+                st_out = fyers_feed.configure(
+                    app_id=body.get("app_id"),
+                    secret_key=body.get("secret_key"),
+                    redirect_uri=body.get("redirect_uri"),
+                    access_token=body.get("access_token"),
+                )
+                if body.get("auth_code"):
+                    st_out = fyers_feed.exchange_auth_code(body["auth_code"])
+                _status_cache["at"] = 0
+                return self._json({"ok": True, **st_out}, 200)
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
         if self.path.startswith("/api/restart"):
             self.rfile.read(n)
             if not REMOTE_ON:
@@ -1147,6 +1211,7 @@ async def main():
     print(f"Clock offset vs time.windows.com: {measure_clock_offset():+.0f} ms (corrected in lag numbers)", flush=True)
     threading.Thread(target=deriv_symbols_loop, daemon=True).start()
     threading.Thread(target=bybit_symbols_loop, daemon=True).start()
+    threading.Thread(target=fyers_feed.symbols_loop, daemon=True).start()
     feedlog.start(FEED_HEALTH, ARM_PORT if REMOTE_ON else None, feed_status)
     print(f"TradeX: open http://localhost:{HTTP_PORT}/hub.html  (data on ws://localhost:{WS_PORT})", flush=True)
     async with websockets.serve(handler, "127.0.0.1", WS_PORT, max_size=None):
