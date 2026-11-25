@@ -26,14 +26,17 @@
   #q:focus { outline:none; border-color:var(--accent); font-weight:400 }
   #list { position:fixed; top:36px; width:460px; max-height:70vh; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:4px; box-shadow:0 10px 30px #000a; z-index:10 }
   #list[hidden] { display:none }
-  .search-tabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; flex:none }
+  .search-tabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; align-items:center; flex:none }
   .search-tabs button { background:transparent; color:var(--dim); border:1px solid transparent; border-radius:12px; padding:3px 9px; font:inherit; font-size:11px; cursor:pointer }
   .search-tabs button:hover { color:var(--text); background:var(--raised) }
   .search-tabs button.on { color:var(--accentInk); background:var(--accent); font-weight:600 }
+  .search-tabs .search-sort { margin-left:auto; border:1px solid var(--line); border-radius:4px; color:var(--dim); padding:2px 7px; font-size:11px }
+  .search-tabs .search-sort.on { background:var(--raised); color:var(--accent); border-color:var(--accent); font-weight:600 }
   .search-rows { overflow:auto; flex:1 }
   .search-rows div { display:flex; gap:10px; align-items:baseline; padding:6px 10px; cursor:pointer }
   .search-rows div:hover, .search-rows div.hi { background:var(--raised) }
   .search-rows b { min-width:96px; font-family:var(--mono); font-weight:600 } .search-rows span { color:var(--dim); overflow:hidden; text-overflow:ellipsis; flex:1 }
+  .search-rows em { font-style:normal; font-size:10px; color:var(--dim); font-family:var(--mono); white-space:nowrap }
   .search-rows i { font-style:normal; font-size:11px; color:var(--accent); font-family:var(--mono) }
   .search-empty { padding:14px 12px; color:var(--dim); font-size:12px }
   #ticker { color:var(--dim); font:12px var(--mono) }
@@ -442,22 +445,39 @@ function paint() {
 }
 $("variant").onchange = (e) => { st.ticker = e.target.value; push(); };
 
-// Instrument search with broker/market tabs
-let hits = [], hi = 0, searchTab = "all";
+// Instrument search with broker/market tabs & volume sort
+let hits = [], hi = 0, searchTab = "all", searchSort = localStorage.getItem("searchSort") || "volume";
 function searchTabs() {
   const tabs = [{ id: "all", label: "All" }];
   const labels = { fyers: "NSE", binance: "Binance", bybit: "Bybit", deriv: "Deriv", arm: "Remote MT5", mt5: "Local MT5" };
   DATA.brokers.forEach((b) => tabs.push({ id: b.id, label: labels[b.id] || b.name }));
   return tabs;
 }
+function volOf(i) {
+  return (searchTab !== "all" && i.vols && i.vols[searchTab]) ? i.vols[searchTab] : (i.vol || 0);
+}
+function fmtVol(v, i) {
+  if (!v || i.group === "nse-index") return "";
+  if (i.group === "nse-eq" || (searchTab === "fyers")) {
+    const cr = v / 1e7;
+    return cr >= 1 ? `₹${cr >= 100 ? Math.round(cr) : cr.toFixed(1)}Cr` : `₹${(v / 1e5).toFixed(0)}L`;
+  }
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `$${Math.round(v / 1e3)}K`;
+  return "";
+}
 function search() {
   const q = $("q").value.trim().toUpperCase(), words = q.split(/\s+/).filter(Boolean);
   let pool = DATA.instruments;
   if (searchTab !== "all") pool = pool.filter((i) => !!i.brokers[searchTab]);
-  if (searchTab === "fyers" && !words.length) {
-    pool = [...pool].sort((a, b) => (a.group === "nse-index" ? 0 : 1) - (b.group === "nse-index" ? 0 : 1) || a.key.localeCompare(b.key));
+  pool = pool.filter((i) => words.every((w) => i.key.includes(w) || i.name.toUpperCase().includes(w)));
+  if (searchSort === "volume") {
+    pool = [...pool].sort((a, b) => (volOf(b) - volOf(a)) || (a.group === "nse-index" ? 0 : 1) - (b.group === "nse-index" ? 0 : 1) || a.key.localeCompare(b.key));
+  } else {
+    pool = [...pool].sort((a, b) => a.key.localeCompare(b.key));
   }
-  hits = pool.filter((i) => words.every((w) => i.key.includes(w) || i.name.toUpperCase().includes(w))).slice(0, 250);
+  hits = pool.slice(0, 250);
   hi = 0;
   const L = $("list"); L.innerHTML = "";
   const tabBar = document.createElement("div"); tabBar.className = "search-tabs";
@@ -469,6 +489,18 @@ function search() {
     b.onmousedown = (e) => { e.preventDefault(); searchTab = t.id; search(); };
     tabBar.appendChild(b);
   });
+  const sortBtn = document.createElement("button");
+  sortBtn.type = "button";
+  sortBtn.className = "search-sort" + (searchSort === "volume" ? " on" : "");
+  sortBtn.textContent = searchSort === "volume" ? "Sort: Volume ↓" : "Sort: A–Z";
+  sortBtn.title = "Toggle sort order between Volume and A–Z";
+  sortBtn.onmousedown = (e) => {
+    e.preventDefault();
+    searchSort = searchSort === "volume" ? "az" : "volume";
+    localStorage.setItem("searchSort", searchSort);
+    search();
+  };
+  tabBar.appendChild(sortBtn);
   const rowsBox = document.createElement("div"); rowsBox.className = "search-rows";
   if (!hits.length) {
     const em = document.createElement("div"); em.className = "search-empty";
@@ -477,9 +509,10 @@ function search() {
   } else {
     hits.forEach((i, n) => {
       const d = document.createElement("div"); if (n === 0) d.className = "hi";
-      d.innerHTML = `<b></b><span></span><i></i>`;
+      d.innerHTML = `<b></b><span></span><em></em><i></i>`;
       d.children[0].textContent = i.key; d.children[1].textContent = i.name;
-      d.children[2].textContent = searchTab !== "all" ? (SHORT[searchTab] || searchTab) : Object.keys(i.brokers).map((b) => SHORT[b]).join(" ");
+      d.children[2].textContent = fmtVol(volOf(i), i);
+      d.children[3].textContent = searchTab !== "all" ? (SHORT[searchTab] || searchTab) : Object.keys(i.brokers).map((b) => SHORT[b]).join(" ");
       d.onmousedown = (e) => { e.preventDefault(); pick(i.key); };
       rowsBox.appendChild(d);
     });

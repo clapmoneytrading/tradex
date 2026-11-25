@@ -428,7 +428,7 @@ def bybit_load_symbols():
         order = ["bybit-metal", "bybit-perp", "bybit-spot", "bybit-futures", "bybit-inverse", "bybit-mark", "bybit-index"]
         out.sort(key=lambda x: (order.index(x["group"]), -x["_t"]))
         for x in out:
-            x.pop("_t")
+            x["vol"] = round(x.pop("_t", 0) or 0)
         bybit_symbols_cache = out
         print(f"Bybit: {len(out)} charts loaded", flush=True)
         return True
@@ -814,11 +814,11 @@ def binance_load_symbols():
             usdt.append((qvol, base, last_p))
         usdt.sort(key=lambda x: -x[0])
         out = []
-        for _, base, last_p in usdt[:100]:
+        for qvol, base, last_p in usdt[:100]:
             ticker = base + "USD"
             name = CRYPTO_NAMES.get(base, f"{base} / USDT")
             digits = 2 if last_p >= 10 else (4 if last_p >= 0.01 else 6)
-            out.append({"ticker": ticker, "name": name, "source": "binance", "group": "crypto", "digits": digits})
+            out.append({"ticker": ticker, "name": name, "source": "binance", "group": "crypto", "digits": digits, "vol": round(qvol)})
         if out:
             binance_symbols_cache = out
             print(f"Binance: {len(out)} top crypto pairs loaded", flush=True)
@@ -952,16 +952,21 @@ def instrument_key(s):
 
 def build_instruments():
     syms = arm_symbols_cache + deriv_symbols_cache + bybit_symbols_cache + fyers_feed.symbols_cache + mt5_symbol_list()[0] + binance_symbols_cache
-    if _instr_cache["n"] == len(syms):
+    if _instr_cache["n"] == len(syms) and time.time() - _instr_cache.get("at", 0) < 60:
         return _instr_cache["data"]
     inst = {}
     for s in syms:
         k, variant = instrument_key(s)
         if not k:
             continue
-        i = inst.setdefault(k, {"key": k, "name": "", "group": s["group"], "brokers": {}})
+        i = inst.setdefault(k, {"key": k, "name": "", "group": s["group"], "brokers": {}, "vol": 0, "vols": {}})
         opts = i["brokers"].setdefault(s["source"], [])
         opts.append({"ticker": s["ticker"], "label": variant or "", "_o": variant_rank(variant or "")})
+        v = s.get("vol") or 0
+        if v > i["vols"].get(s["source"], 0):
+            i["vols"][s["source"]] = v
+        if v > i["vol"]:
+            i["vol"] = v
         if s["source"] == "arm" or not i["name"]:
             i["name"] = s["name"].replace("Remote MT5 - ", "").split(" (")[0]
             if s["source"] == "arm":
@@ -975,7 +980,7 @@ def build_instruments():
     rank = {"metal": 0, "crypto": 1, "forex": 2, "index": 3, "energy": 4, "stock": 6}
     out.sort(key=lambda i: (-len(i["brokers"]), rank.get(i["group"], 5), i["key"]))
     data = {"brokers": [{"id": b, "name": n} for b, n in BROKERS], "instruments": out}
-    _instr_cache.update(n=len(syms), data=data)
+    _instr_cache.update(n=len(syms), at=time.time(), data=data)
     return data
 
 _status_cache = {"at": 0, "data": None}

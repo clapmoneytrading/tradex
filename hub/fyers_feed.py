@@ -218,6 +218,35 @@ def login_url():
     return f"https://api-t1.fyers.in/api/v3/generate-authcode?{params}"
 
 
+def _fetch_nse_volumes():
+    """Fetch NSE equity traded value (turnover in INR) for volume sorting."""
+    try:
+        payload = json.dumps({
+            "filter": [{"left": "exchange", "operation": "equal", "right": "NSE"}],
+            "options": {"lang": "en"},
+            "symbols": {"query": {"types": []}, "tickers": []},
+            "columns": ["name", "Value.Traded", "volume"],
+            "sort": {"sortBy": "Value.Traded", "sortOrder": "desc"},
+            "range": [0, 3000],
+        }).encode("utf-8")
+        res = _req_json(
+            "https://scanner.tradingview.com/india/scan",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=12,
+        )
+        vols = {}
+        for row in res.get("data") or []:
+            d = row.get("d") or []
+            if len(d) >= 2 and d[0]:
+                val = d[1] or d[2] or 0
+                if val and val > 0:
+                    vols[str(d[0]).upper()] = round(float(val))
+        return vols
+    except Exception:
+        return {}
+
+
 def load_symbols():
     """Load NSE Equities (-EQ) + Indices (-INDEX) from Fyers public symbol master CSV."""
     global symbols_cache
@@ -239,6 +268,15 @@ def load_symbols():
     except Exception:
         pass
 
+    vols = _fetch_nse_volumes()
+    index_rank = {
+        "NSE:NIFTY50-INDEX": 9e12,
+        "NSE:NIFTYBANK-INDEX": 8e12,
+        "NSE:FINNIFTY-INDEX": 7e12,
+        "NSE:MIDCPNIFTY-INDEX": 6e12,
+        "NSE:INDIAVIX-INDEX": 5e12,
+    }
+
     out = []
     seen = set()
     if raw_csv:
@@ -259,13 +297,15 @@ def load_symbols():
                 continue
             seen.add(ticker)
             name = (row[1] or ticker).strip()
-            out.append({"ticker": ticker, "name": name, "source": "fyers", "group": grp, "digits": 2})
+            base = ticker[4:].rsplit("-", 1)[0].upper()
+            vol = index_rank.get(ticker, vols.get(base, 0))
+            out.append({"ticker": ticker, "name": name, "source": "fyers", "group": grp, "digits": 2, "vol": round(vol)})
 
     if not out:
-        out = [{"ticker": t, "name": n, "source": "fyers", "group": g, "digits": 2} for t, n, g in FALLBACK_NSE]
+        out = [{"ticker": t, "name": n, "source": "fyers", "group": g, "digits": 2, "vol": round(index_rank.get(t, vols.get(t[4:].rsplit("-", 1)[0].upper(), 0)))} for t, n, g in FALLBACK_NSE]
     else:
-        # Put indices first, then popular/alphabetical equities
-        out.sort(key=lambda x: (x["group"] != "nse-index", x["ticker"]))
+        # Put indices first, then high-volume/popular equities
+        out.sort(key=lambda x: (x["group"] != "nse-index", -(x.get("vol") or 0), x["ticker"]))
 
     symbols_cache = out
     return out
