@@ -420,7 +420,8 @@ window.TradingPanel = (() => {
       return;
     }
     const rep = reports[activeReportIdx] || reports[0];
-    const st = computeStats(rep.trades, DEFAULT_CAP);
+    const initCap = (rep.strategy && Number(rep.strategy.initialCapital) > 0) ? Number(rep.strategy.initialCapital) : DEFAULT_CAP;
+    const st = computeStats(rep.trades, initCap);
     const sSym = rep.symbol || sym;
 
     body.innerHTML = `
@@ -451,19 +452,20 @@ window.TradingPanel = (() => {
       `;
     } else if (activeStratTab === "summary") {
       const { all, longs, shorts } = st;
+      const pct = (v) => initCap > 0 ? ` <small>(${v >= 0 ? "+" : ""}${((v / initCap) * 100).toFixed(2)}%)</small>` : "";
       const rows = [
-        ["Net Profit", fmtMoney(all.net, sSym), fmtMoney(longs.net, sSym), fmtMoney(shorts.net, sSym)],
-        ["Gross Profit", fmtMoney(all.gp, sSym), fmtMoney(longs.gp, sSym), fmtMoney(shorts.gp, sSym)],
-        ["Gross Loss", fmtMoney(-all.gl, sSym), fmtMoney(-longs.gl, sSym), fmtMoney(-shorts.gl, sSym)],
-        ["Max Drawdown", `${fmtMoney(-all.maxDD, sSym)} (${all.maxDDPct.toFixed(2)}%)`, `${fmtMoney(-longs.maxDD, sSym)}`, `${fmtMoney(-shorts.maxDD, sSym)}`],
+        ["Net Profit", fmtMoney(all.net, sSym) + pct(all.net), fmtMoney(longs.net, sSym) + pct(longs.net), fmtMoney(shorts.net, sSym) + pct(shorts.net)],
+        ["Gross Profit", fmtMoney(all.gp, sSym) + pct(all.gp), fmtMoney(longs.gp, sSym) + pct(longs.gp), fmtMoney(shorts.gp, sSym) + pct(shorts.gp)],
+        ["Gross Loss", fmtMoney(-all.gl, sSym) + pct(-all.gl), fmtMoney(-longs.gl, sSym) + pct(-longs.gl), fmtMoney(-shorts.gl, sSym) + pct(-shorts.gl)],
+        ["Max Drawdown", `${fmtMoney(-all.maxDD, sSym)} <small>(${all.maxDDPct.toFixed(2)}%)</small>`, `${fmtMoney(-longs.maxDD, sSym)} <small>(${longs.maxDDPct.toFixed(2)}%)</small>`, `${fmtMoney(-shorts.maxDD, sSym)} <small>(${shorts.maxDDPct.toFixed(2)}%)</small>`],
         ["Profit Factor", Number.isFinite(all.pf) ? all.pf.toFixed(3) : "∞", Number.isFinite(longs.pf) ? longs.pf.toFixed(3) : "∞", Number.isFinite(shorts.pf) ? shorts.pf.toFixed(3) : "∞"],
         ["Total Closed Trades", all.n, longs.n, shorts.n],
         ["Number Winning Trades", all.wins, longs.wins, shorts.wins],
         ["Number Losing Trades", all.losses, longs.losses, shorts.losses],
         ["Percent Profitable", `${all.winRate.toFixed(2)}%`, `${longs.winRate.toFixed(2)}%`, `${shorts.winRate.toFixed(2)}%`],
-        ["Avg Trade", fmtMoney(all.avg, sSym), fmtMoney(longs.avg, sSym), fmtMoney(shorts.avg, sSym)],
-        ["Avg Winning Trade", fmtMoney(all.avgWin, sSym), fmtMoney(longs.avgWin, sSym), fmtMoney(shorts.avgWin, sSym)],
-        ["Avg Losing Trade", fmtMoney(-all.avgLoss, sSym), fmtMoney(-longs.avgLoss, sSym), fmtMoney(-shorts.avgLoss, sSym)],
+        ["Avg Trade", fmtMoney(all.avg, sSym) + pct(all.avg), fmtMoney(longs.avg, sSym) + pct(longs.avg), fmtMoney(shorts.avg, sSym) + pct(shorts.avg)],
+        ["Avg Winning Trade", fmtMoney(all.avgWin, sSym) + pct(all.avgWin), fmtMoney(longs.avgWin, sSym) + pct(longs.avgWin), fmtMoney(shorts.avgWin, sSym) + pct(shorts.avgWin)],
+        ["Avg Losing Trade", fmtMoney(-all.avgLoss, sSym) + pct(-all.avgLoss), fmtMoney(-longs.avgLoss, sSym) + pct(-longs.avgLoss), fmtMoney(-shorts.avgLoss, sSym) + pct(-shorts.avgLoss)],
         ["Ratio Avg Win / Avg Loss", Number.isFinite(all.ratio) ? all.ratio.toFixed(3) : "∞", Number.isFinite(longs.ratio) ? longs.ratio.toFixed(3) : "∞", Number.isFinite(shorts.ratio) ? shorts.ratio.toFixed(3) : "∞"],
         ["Largest Winning Trade", fmtMoney(all.maxWin, sSym), fmtMoney(longs.maxWin, sSym), fmtMoney(shorts.maxWin, sSym)],
         ["Largest Losing Trade", fmtMoney(all.maxLoss, sSym), fmtMoney(longs.maxLoss, sSym), fmtMoney(shorts.maxLoss, sSym)],
@@ -477,6 +479,9 @@ window.TradingPanel = (() => {
       sb.innerHTML = `<table class="tp-tbl"><thead><tr><th>#</th><th>Type</th><th>Signal</th><th>Entry Time</th><th>Entry Price</th><th>Exit Time</th><th>Exit Price</th><th>Qty</th><th>Profit</th><th>Cum. Profit</th><th>Run-up</th><th>Drawdown</th></tr></thead><tbody>${
         st.trades.map((t, idx) => {
           if (!t.isOpen) cum += t.profit;
+          const notional = (Number(t.entryPrice) || 0) * (t.qty || 0);
+          const retPct = notional > 0 ? (t.profit / notional) * 100 : 0;
+          const cumPct = initCap > 0 ? (cum / initCap) * 100 : 0;
           return `<tr>
             <td>${idx + 1}</td>
             <td class="${t.isLong ? "pos" : "neg"}">${t.isLong ? "Long" : "Short"}${t.isOpen ? " (Open)" : ""}</td>
@@ -486,8 +491,8 @@ window.TradingPanel = (() => {
             <td>${t.exitTime ? fmtTime(t.exitTime) : "-"}</td>
             <td>${t.exitPrice != null ? fmtNum(Number(t.exitPrice), t.exitPrice < 10 ? 4 : 2) : "-"}</td>
             <td>${t.qty.toFixed(t.qty < 1 ? 4 : 2)}</td>
-            <td class="${t.profit >= 0 ? "pos" : "neg"}">${fmtMoney(t.profit, sSym)}</td>
-            <td class="${cum >= 0 ? "pos" : "neg"}">${fmtMoney(cum, sSym)}</td>
+            <td class="${t.profit >= 0 ? "pos" : "neg"}">${fmtMoney(t.profit, sSym)} <small>(${retPct >= 0 ? "+" : ""}${retPct.toFixed(2)}%)</small></td>
+            <td class="${cum >= 0 ? "pos" : "neg"}">${fmtMoney(cum, sSym)} <small>(${cumPct >= 0 ? "+" : ""}${cumPct.toFixed(2)}%)</small></td>
             <td>${fmtMoney(t.maxRunup, sSym)}</td>
             <td class="neg">${fmtMoney(-Math.abs(t.maxDrawdown), sSym)}</td>
           </tr>`;

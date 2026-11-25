@@ -96,17 +96,29 @@ let ws;
 // A Pine barcolor() repaints candle bodies over the user's colours. The hub's setting wins unless "Let indicators recolour candles" is on.
 class HubPineEngine extends VelaLab.PineWorkerEngine {
   execute(req, handlers) {
+    let exec;
     const h = Object.create(handlers);
     h.onModel = (model) => {
       if (!HubSettingsLoad().indicatorBars && model && model.barColors) model = { ...model, barColors: undefined };
       if (LabEmbedded && model && Array.isArray(model.trades) && model.trades.length) {
-        const title = (req && req.prepared && req.prepared.meta && req.prepared.meta.title) || (model.meta && model.meta.title) || "Strategy";
+        const title = (req && req.prepared && req.prepared.meta && req.prepared.meta.title) || (model.meta && model.meta.title) || model.title || "Strategy";
         const sym = String((req && req.market && req.market.symbol) || window.LabDefaultSymbol || "").replace(/^lab:/, "");
-        window.parent.postMessage({ evt: "strategy:report", title, symbol: sym, tf: window.LabDefaultTF, trades: model.trades }, location.origin);
+        const tf = window.LabDefaultTF;
+        const postCtx = () => {
+          if (!exec || typeof exec.getContext !== "function") return;
+          exec.getContext(["meta", "strategy", "trades"]).then((snap) => {
+            if (snap && Array.isArray(snap.trades) && snap.trades.length) {
+              window.parent.postMessage({ evt: "strategy:report", title, symbol: sym, tf, trades: snap.trades, strategy: snap.strategy || null }, location.origin);
+            }
+          }).catch(() => {});
+        };
+        if (exec) postCtx();
+        else setTimeout(postCtx, 0);
       }
       handlers.onModel(model);
     };
-    return super.execute(req, h);
+    exec = super.execute(req, h);
+    return exec;
   }
 }
 // Inside the TradeX, Vela's own "Indicators" button opens the hub's own Indicators dialog
