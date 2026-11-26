@@ -153,7 +153,7 @@ function guardCandleColours(chart) {
   try { chart.renderer.onConfigChanged(() => { const c = chart.renderer.getConfig().candles; if (c && (c.upColor !== HubTheme.up || c.downColor !== HubTheme.down)) colorChart(chart); }); } catch (e) { console.warn("config guard", e); }
 }
 function colorChart(chart) {
-  const t = HubTheme;
+  const t = HubTheme, cfg = HubSettingsLoad();
   guardCandleColours(chart);
   try {
     chart.renderer.applyConfig({
@@ -165,7 +165,7 @@ function colorChart(chart) {
       bars: { upColor: t.up, downColor: t.down },
       line: { color: t.accent }, area: { lineColor: t.accent, topColor: hexA(t.accent, 0.28), bottomColor: hexA(t.accent, 0.02) },
       baseline: { topLineColor: t.up, bottomLineColor: t.down, topFillColor: hexA(t.up, 0.25), bottomFillColor: hexA(t.down, 0.25) },
-      trades: { longColor: t.up, shortColor: t.down },
+      trades: { visible: cfg.tradeArrows, labels: cfg.tradeLabels, qty: cfg.tradeQty, longColor: t.up, shortColor: t.down },
     });
   } catch (e) { console.warn("theme config", e); }
   try { // built-in volume keeps its own colours: recolour it only if it is on the chart

@@ -730,6 +730,16 @@ function renderSettings() {
   const ib = document.createElement("label"), ibx = document.createElement("input"); ibx.type = "checkbox"; ibx.checked = s.indicatorBars;
   ib.append("Let indicators recolour candles", ibx); ib.title = "Off: your two colours always win. On: an indicator using Pine barcolor() may paint candle bodies."; cs.appendChild(ib);
   ibx.onchange = () => { HubSettingsSave({ ...HubSettingsLoad(), indicatorBars: ibx.checked }); loadEngine(); };  // indicators re-run with the new rule
+  const tm = sec("Strategy Markers");
+  [["tradeArrows", "Show signal arrows"], ["tradeLabels", "Show order labels (Long / Close)"], ["tradeQty", "Show position size / values"]].forEach(([key, label]) => {
+    const l = document.createElement("label"), cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = s[key];
+    l.append(label, cb); tm.appendChild(l);
+    cb.onchange = () => {
+      const cur = HubSettingsLoad(); cur[key] = cb.checked; HubSettingsSave(cur);
+      panes.forEach((p) => { const w = p.frame.contentWindow; if (w) w.postMessage({ cmd: "theme" }, location.origin); });
+    };
+  });
   const ui = colors("Interface", [["bg", "Chart background"], ["panel", "Panels and bars"], ["text", "Text"], ["dim", "Secondary text"], ["line", "Borders"], ["grid", "Grid lines"], ["accent", "Accent (selection, price)"]]);
   const r = document.createElement("button"); r.className = "reset"; r.textContent = "Reset colours to theme";
   r.onclick = () => { HubSettingsSave({ ...HubSettingsLoad(), overrides: {} }); themeChanged(); }; ui.appendChild(r);

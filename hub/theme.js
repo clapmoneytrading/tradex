@@ -31,7 +31,15 @@ function hexA(hex, a) { // "#rrggbb" + alpha -> rgba()
 window.HubSettingsLoad = () => {
   let s = {};
   try { s = JSON.parse(localStorage.getItem("chartHubTheme") || "{}"); } catch (_) {}
-  return { preset: HubPresets[s.preset] ? s.preset : "graphite", font: HubFonts[s.font] ? s.font : "system", overrides: s.overrides || {}, indicatorBars: !!s.indicatorBars };
+  return {
+    preset: HubPresets[s.preset] ? s.preset : "graphite",
+    font: HubFonts[s.font] ? s.font : "system",
+    overrides: s.overrides || {},
+    indicatorBars: !!s.indicatorBars,
+    tradeArrows: s.tradeArrows !== false,
+    tradeLabels: s.tradeLabels !== false,
+    tradeQty: s.tradeQty !== false,
+  };
 };
 window.HubSettingsSave = (s) => { try { localStorage.setItem("chartHubTheme", JSON.stringify(s)); } catch (_) {} };
 
