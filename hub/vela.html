@@ -56,6 +56,8 @@ const provider = {
         const b = out[out.length - 1];
         window.parent.postMessage({ evt: "tick", symbol: ticker, price: b.close, time: b.time }, location.origin);
       }
+    } else if (out.length && lastBars.length && out[out.length - 1].time < lastBars[0].time) {
+      lastBars = out.concat(lastBars);
     }
     return out;
   },
@@ -97,18 +99,22 @@ let ws;
 class HubPineEngine extends VelaLab.PineWorkerEngine {
   execute(req, handlers) {
     let exec;
+    const src = (req && req.prepared && req.prepared.token && req.prepared.token.source) || "";
+    const isStrategy = /\bstrategy\s*\(/m.test(src);
     const h = Object.create(handlers);
     h.onModel = (model) => {
       if (!HubSettingsLoad().indicatorBars && model && model.barColors) model = { ...model, barColors: undefined };
-      if (LabEmbedded && model && Array.isArray(model.trades) && model.trades.length) {
+      if (LabEmbedded && model && (isStrategy || (Array.isArray(model.trades) && model.trades.length))) {
         const title = (req && req.prepared && req.prepared.meta && req.prepared.meta.title) || (model.meta && model.meta.title) || model.title || "Strategy";
         const sym = String((req && req.market && req.market.symbol) || window.LabDefaultSymbol || "").replace(/^lab:/, "");
-        const tf = window.LabDefaultTF;
+        const tf = (req && req.market && req.market.timeframe) ? LabTF.fromAny(req.market.timeframe) : window.LabDefaultTF;
         const postCtx = () => {
           if (!exec || typeof exec.getContext !== "function") return;
           exec.getContext(["meta", "strategy", "trades"]).then((snap) => {
-            if (snap && Array.isArray(snap.trades) && snap.trades.length) {
-              window.parent.postMessage({ evt: "strategy:report", title, symbol: sym, tf, trades: snap.trades, strategy: snap.strategy || null }, location.origin);
+            const trades = (snap && Array.isArray(snap.trades)) ? snap.trades : [];
+            const strategy = (snap && snap.strategy) || null;
+            if (trades.length || isStrategy || strategy) {
+              window.parent.postMessage({ evt: "strategy:report", title, symbol: sym, tf, trades, strategy }, location.origin);
             }
           }).catch(() => {});
         };
@@ -186,11 +192,36 @@ function build(layout) {
   // Colour every chart once its first history is in (the volume indicator mounts with the data).
   setTimeout(applyTheme, 1500);
   // Tell the TradeX shell when the symbol or timeframe is changed inside Vela.
+  let histGenesis = false, histLoading = false, histTarget = 1000, histOldest = 0, histLoaded = 0, vpDebounce = null;
   ws.chart.on("market:changed", ({ symbol, timeframe }) => {
     // Remember the current market, so a layout rebuild opens on it (not on the first symbol).
     if (symbol) window.LabDefaultSymbol = String(symbol).replace(/^lab:/, "");
     if (timeframe) window.LabDefaultTF = LabTF.fromAny(timeframe);
+    histGenesis = false; histLoading = false; histTarget = 1000; histOldest = 0; histLoaded = 0;
   });
+  try {
+    ws.chart.on("history:complete", ({ reason, oldestTime, barsLoaded }) => {
+      histLoading = false;
+      if (oldestTime) histOldest = oldestTime;
+      if (barsLoaded) histLoaded = barsLoaded;
+      if (reason === "genesis" || reason === "aborted") histGenesis = true;
+    });
+    ws.chart.on("viewport:changed", ({ from }) => {
+      if (histGenesis || histLoading || !Number.isFinite(from)) return;
+      const firstTime = histOldest || (lastBars[0] && lastBars[0].time);
+      if (!firstTime) return;
+      const stepMs = (LabTF.sec[window.LabDefaultTF] || 60) * 1000;
+      if (from <= firstTime + stepMs * 60) {
+        clearTimeout(vpDebounce);
+        vpDebounce = setTimeout(() => {
+          if (histGenesis || histLoading) return;
+          histLoading = true;
+          histTarget = Math.max(histTarget, histLoaded || lastBars.length) + 1000;
+          ws.chart.setMarket({ bars: histTarget });
+        }, 200);
+      }
+    });
+  } catch (e) { console.warn("auto history hook", e); }
   // An indicator removed from Vela's legend: the hub forgets it too (else it comes back on reload).
   // Settings changed in Vela's dialog: the hub stores the values so they survive a reload.
   try { ws.chart.on("indicator:inputs", (ev) => { const h = ws.chart.indicators().find((x) => x.id === (ev && ev.id)); if (LabEmbedded && h) window.parent.postMessage({ evt: "ind:inputs", id: h.id, inputs: h.inputValues(), props: h.propValues ? h.propValues() : {} }, location.origin); }); } catch (_) {}

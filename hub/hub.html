@@ -462,6 +462,7 @@ function push() {
   const w = p.frame.contentWindow;
   if (w && w.labChart && w.labChart.setMarket) w.postMessage({ cmd: "set", symbol: st.ticker, tf: st.tf }, location.origin);
   else loadPane(activePane);
+  if (window.TradingPanel && TradingPanel.onSymbolChange) TradingPanel.onSymbolChange(st.ticker, st.tf);
   savePaneConfig();
 }
 function chooseInstrument(k, preferredBroker) {

@@ -231,13 +231,25 @@ window.TradingPanel = (() => {
 
   function onStrategyReport(rep) {
     if (!rep || !Array.isArray(rep.trades)) return;
-    const idx = reports.findIndex((r) => r.title === rep.title && r.symbol === rep.symbol);
+    const idx = reports.findIndex((r) => r.title === rep.title && r.symbol === rep.symbol && r.tf === rep.tf);
     if (idx >= 0) { reports[idx] = rep; activeReportIdx = idx; }
     else { reports.unshift(rep); activeReportIdx = 0; }
     const badge = document.getElementById("stratBadge");
     if (badge) badge.textContent = String(rep.trades.length);
     if (!bottomOpen) open("strategy");
     else render();
+  }
+
+  function onSymbolChange(sym, tf) {
+    if (!reports.length || !sym) return;
+    const idx = reports.findIndex((r) => r.symbol === sym && (!tf || r.tf === tf));
+    const fallback = idx >= 0 ? idx : reports.findIndex((r) => r.symbol === sym);
+    if (fallback >= 0) {
+      activeReportIdx = fallback;
+      const badge = document.getElementById("stratBadge");
+      if (badge) badge.textContent = String(reports[fallback].trades.length);
+      if (bottomOpen && activeMainTab === "strategy") render();
+    }
   }
 
   function open(tab) {
@@ -433,7 +445,13 @@ window.TradingPanel = (() => {
       </div>
       <div class="tp-scroll" id="stBody"></div>
     `;
-    document.getElementById("stPick").onchange = (e) => { activeReportIdx = Number(e.target.value); render(); };
+    document.getElementById("stPick").onchange = (e) => {
+      activeReportIdx = Number(e.target.value);
+      const badge = document.getElementById("stratBadge");
+      const picked = reports[activeReportIdx];
+      if (badge && picked) badge.textContent = String(picked.trades.length);
+      render();
+    };
     body.querySelectorAll("[data-st]").forEach((b) => { b.onclick = () => { activeStratTab = b.dataset.st; render(); }; });
 
     const sb = document.getElementById("stBody");
@@ -501,5 +519,5 @@ window.TradingPanel = (() => {
     }
   }
 
-  return { onTick, onStrategyReport, placeOrder, open, close, toggle, render };
+  return { onTick, onStrategyReport, onSymbolChange, placeOrder, open, close, toggle, render };
 })();
