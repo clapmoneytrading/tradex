@@ -246,8 +246,7 @@ window.TradingPanel = (() => {
     const activeRep = reports[activeReportIdx] || rep;
     const badge = document.getElementById("stratBadge");
     if (badge) badge.textContent = String(activeRep.trades.length);
-    if (!bottomOpen) open("strategy");
-    else render();
+    if (bottomOpen) render();
   }
 
   function onSymbolChange(sym, tf) {
