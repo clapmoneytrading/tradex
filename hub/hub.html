@@ -235,6 +235,8 @@ const SHORT = { arm: "RMT", bybit: "BYB", deriv: "DER", mt5: "MT5", binance: "BI
 const $ = (id) => document.getElementById(id);
 let DATA = { brokers: [], instruments: [] }, BY_TICKER = new Map(), status = {};
 let st = { engine: "vela", key: "XAUUSD", broker: "deriv", ticker: "frxXAUUSD", tf: "M1" };
+window.st = st;
+window.getActiveMarket = () => ({ ticker: st.ticker, tf: st.tf, broker: st.broker });
 try { Object.assign(st, JSON.parse(localStorage.getItem("chartHub") || "{}")); } catch (_) {}
 const save = () => { try { localStorage.setItem("chartHub", JSON.stringify(st)); } catch (_) {} };
 const inst = (k) => DATA.instruments.find((i) => i.key === k);
@@ -291,6 +293,7 @@ function buildPanes() {
       const w = p.frame.contentWindow;
       if (w && w.labChart && w.labChart.setMarket) w.postMessage({ cmd: "set", symbol: p.ticker, tf: p.tf }, location.origin);
       else loadPane(i);
+      if (window.TradingPanel && TradingPanel.onSymbolChange) TradingPanel.onSymbolChange(p.ticker, p.tf);
       savePaneConfig();
     };
   }
@@ -341,6 +344,7 @@ function syncActivePane() {
     const m = BY_TICKER.get(p.ticker);
     if (m) { st.key = m.key; st.broker = m.broker; } else { st.key = p.ticker; st.broker = p.broker; }
     st.ticker = p.ticker; st.tf = p.tf; save(); paint();
+    if (window.TradingPanel && TradingPanel.onSymbolChange) TradingPanel.onSymbolChange(st.ticker, st.tf);
   }
 }
 
@@ -353,6 +357,7 @@ function setPaneTF(idx, tf) {
   const w = p.frame.contentWindow;
   if (w && w.labChart && w.labChart.setMarket) w.postMessage({ cmd: "set", symbol: p.ticker, tf: p.tf }, location.origin);
   else loadPane(idx);
+  if (window.TradingPanel && TradingPanel.onSymbolChange) TradingPanel.onSymbolChange(p.ticker, p.tf);
   savePaneConfig();
 }
 
@@ -615,7 +620,7 @@ window.addEventListener("message", (e) => {
   if (e.data.evt === "ind:ready") { onReady(e.data); return; }
   if (e.data.evt === "hud") { if (pIdx < 0 || pIdx === activePane) $("hud").textContent = e.data.text; return; }
   if (e.data.evt === "tick") { if (window.TradingPanel) TradingPanel.onTick(e.data.symbol, e.data.price); return; }
-  if (e.data.evt === "strategy:report") { if (window.TradingPanel) { $("stratBadge").hidden = false; TradingPanel.onStrategyReport(e.data); } return; }
+  if (e.data.evt === "strategy:report") { if (window.TradingPanel) { $("stratBadge").hidden = false; TradingPanel.onStrategyReport(e.data, pIdx < 0 || pIdx === activePane); } return; }
   if (e.data.evt !== "market") return;
   const { symbol, tf } = e.data; if (!symbol) return;
   if (pIdx >= 0) {
@@ -632,6 +637,7 @@ window.addEventListener("message", (e) => {
   else st.key = symbol;  // a symbol outside the instrument map: shown raw
   st.ticker = symbol; if (tf) st.tf = tf;
   save(); paint();
+  if (window.TradingPanel && TradingPanel.onSymbolChange) TradingPanel.onSymbolChange(st.ticker, st.tf);
 });
 
 async function refreshInstruments() {

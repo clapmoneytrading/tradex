@@ -23,7 +23,8 @@ window.TradingPanel = (() => {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (_) {}
   }
 
-  const curSym = () => (window.st && window.st.ticker) || "BTCUSD";
+  const curSym = () => (window.getActiveMarket && window.getActiveMarket().ticker) || (window.st && window.st.ticker) || "BTCUSD";
+  const curTf = () => (window.getActiveMarket && window.getActiveMarket().tf) || (window.st && window.st.tf) || "";
   const ccy = (sym) => (/^NSE:|-EQ$|-INDEX$/i.test(sym || "") ? "₹" : "$");
   const fmtNum = (n, d = 2) => Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }) : "-";
   const fmtMoney = (n, sym) => {
@@ -229,13 +230,22 @@ window.TradingPanel = (() => {
     return { all, longs, shorts, trades, closed, open, openPnl, initialCap };
   }
 
-  function onStrategyReport(rep) {
+  function onStrategyReport(rep, isActivePane = true) {
     if (!rep || !Array.isArray(rep.trades)) return;
-    const idx = reports.findIndex((r) => r.title === rep.title && r.symbol === rep.symbol && r.tf === rep.tf);
-    if (idx >= 0) { reports[idx] = rep; activeReportIdx = idx; }
-    else { reports.unshift(rep); activeReportIdx = 0; }
+    let idx = reports.findIndex((r) => r.title === rep.title && r.symbol === rep.symbol && r.tf === rep.tf);
+    if (idx >= 0) {
+      reports[idx] = rep;
+    } else {
+      reports.unshift(rep);
+      idx = 0;
+    }
+    const matchesCurrent = rep.symbol === curSym() && (!curTf() || rep.tf === curTf());
+    if (isActivePane || matchesCurrent || reports.length === 1) {
+      activeReportIdx = idx;
+    }
+    const activeRep = reports[activeReportIdx] || rep;
     const badge = document.getElementById("stratBadge");
-    if (badge) badge.textContent = String(rep.trades.length);
+    if (badge) badge.textContent = String(activeRep.trades.length);
     if (!bottomOpen) open("strategy");
     else render();
   }
@@ -248,8 +258,8 @@ window.TradingPanel = (() => {
       activeReportIdx = fallback;
       const badge = document.getElementById("stratBadge");
       if (badge) badge.textContent = String(reports[fallback].trades.length);
-      if (bottomOpen && activeMainTab === "strategy") render();
     }
+    if (bottomOpen && activeMainTab === "strategy") render();
   }
 
   function open(tab) {
