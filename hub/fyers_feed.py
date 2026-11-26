@@ -358,7 +358,7 @@ def _agg_bars(bars, tf):
     return out
 
 
-def history(symbol, tf, limit=1000, to_ms=None):
+def history(symbol, tf, limit=1000, to_ms=None, from_sec=None):
     global _rate_until
     res = FYERS_TF.get(tf)
     if not res:
@@ -366,7 +366,7 @@ def history(symbol, tf, limit=1000, to_ms=None):
     sec = TF_SEC[tf]
     lim = int(limit)
     ttl = 600 if to_ms else (180 if tf in ("W1", "MN1") else max(45, min(180, sec // 2)))
-    key = (symbol, tf, lim, str(int(to_ms) // 1000) if to_ms else "")
+    key = (symbol, tf, lim, str(int(to_ms) // 1000) if to_ms else "", str(int(from_sec)) if from_sec else "")
     now = time.time()
 
     with _hist_lock:
@@ -397,15 +397,22 @@ def history(symbol, tf, limit=1000, to_ms=None):
                     return hit[1]
             raise RuntimeError("Fyers rate limit cooldown (50 req/min); retrying shortly.")
         range_to = int(int(to_ms) // 1000) if to_ms else int(time.time())
-        chunks = 3 if tf in ("D1", "W1", "MN1") else 1
+        max_span = 365 * 86400 if res == "D" else 95 * 86400
+        if from_sec is not None and not to_ms and (range_to - int(from_sec)) <= max_span:
+            chunks = 1
+        else:
+            chunks = 3 if tf in ("D1", "W1", "MN1") else 1
         all_candles = []
         for idx in range(chunks):
             c_to = range_to - idx * 365 * 86400 - (1 if idx > 0 else 0)
             if c_to <= 0 or len(all_candles) >= lim:
                 break
-            max_span = 365 * 86400 if res == "D" else 95 * 86400
             wanted_span = max(lim * sec * 3, 7 * 86400)
-            c_from = max(0, c_to - min(max_span, wanted_span))
+            if from_sec is not None and idx == 0 and not to_ms:
+                c_from = max(0, min(c_to - 86400, int(from_sec)))
+                c_from = max(c_from, c_to - max_span)
+            else:
+                c_from = max(0, c_to - min(max_span, wanted_span))
             params = urllib.parse.urlencode({
                 "symbol": symbol,
                 "resolution": res,
@@ -510,9 +517,11 @@ def _ensure_quote_loop():
 
 
 async def stream(ws, symbol, tf, record_tick, true_now_ms):
+    import bar_cache
     sec = TF_SEC[tf]
+    ttl = 180 if tf in ("W1", "MN1") else max(45, min(180, sec // 2))
     try:
-        bars = await asyncio.to_thread(history, symbol, tf, 1000)
+        bars = await asyncio.to_thread(bar_cache.get_bars, "fyers", symbol, tf, 1000, None, sec, history, ttl)
     except Exception as e:
         await ws.send(json.dumps({"type": "error", "msg": str(e)}))
         return

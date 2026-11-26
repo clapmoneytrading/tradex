@@ -36,7 +36,7 @@ def load_env(path):
 
 load_env(os.path.join(HERE, "..", ".env"))
 load_env(os.path.join(HERE, ".env"))
-import logbus, feedlog, fyers_feed
+import logbus, feedlog, fyers_feed, bar_cache
 
 HTTP_PORT = int(os.environ.get("HUB_HTTP_PORT", "8770"))
 WS_PORT = int(os.environ.get("HUB_WS_PORT", "8765"))
@@ -1054,7 +1054,7 @@ def cached_bars(source, symbol, tf, limit=HISTORY, to_ms=None):
                 return hit[1]
     try:
         fn = {"mt5": mt5_history, "deriv": deriv_history, "arm": arm_history, "bybit": bybit_history, "fyers": fyers_feed.history}.get(src, binance_history)
-        bars = fn(symbol, tf, lim, to_ms)
+        bars = bar_cache.get_bars(src, symbol, tf, lim, to_ms, TF_SEC[tf], fn, ttl)
         with _bars_lock:
             if len(_bars_cache) > 256:
                 cutoff = time.time() - 300
