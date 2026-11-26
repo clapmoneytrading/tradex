@@ -31,14 +31,17 @@
 let lastBars = [];
 const provider = {
   async listSymbols() {
-    return LabSymbols.map((s) => ({ ticker: s.ticker, description: s.name, type: /crypto|bybit-(perp|spot|futures|inverse|mark|index)/.test(s.group) ? "crypto" : /forex/.test(s.group) ? "forex" : s.group === "arm-stock" ? "stock" : /index|indices/.test(s.group) ? "index" : "commodity" }));
+    return LabSymbols.map((s) => ({ ticker: s.ticker, description: s.name, type: /crypto|bybit-(perp|spot|futures|inverse|mark|index)/.test(s.group) ? "crypto" : /forex/.test(s.group) ? "forex" : /nse-eq|arm-stock|stock/.test(s.group) ? "stock" : /nse-index|index|indices/.test(s.group) ? "index" : "commodity" }));
   },
   async getBars(ticker, timeframe, range = {}) {
     const tf = LabTF.fromAny(timeframe);
-    const want = range.limit || 1000;
-    // Initial load: fetch 1 fast page (1000 bars) so charts open in <1s without hitting broker rate limits.
-    // Only page backwards when Vela explicitly asks for a historical range (range.from / range.to).
-    const maxPages = (!range.to && !range.from) ? 1 : (window.srcOf && window.srcOf(ticker) === "fyers" ? 4 : 10);
+    const isFyers = window.srcOf && window.srcOf(ticker) === "fyers";
+    const tfSec = LabTF.sec[tf] || 60;
+    const isDaily = tfSec >= 86400;
+    // Fyers D1+ needs 3 pages (3 × ~250 bars ≈ 750) so EMA-200 strategies have enough warm-up bars.
+    // Other sources / timeframes: 1 fast page on initial load, full paging on explicit range requests.
+    const want = (isFyers && isDaily && !range.to && !range.from) ? 3000 : (range.limit || 1000);
+    const maxPages = (!range.to && !range.from) ? (isFyers && isDaily ? 3 : 1) : (isFyers ? 4 : 10);
     let out = [], to = range.to;
     for (let page = 0; page < maxPages && out.length < want; page++) {
       const got = (await LabFeed.history(ticker, tf, to, Math.min(1000, want - out.length))).map((b) => ({ ...b, time: b.time * 1000 }));
@@ -177,8 +180,8 @@ function build(layout) {
   ws = new VelaLab.VelaWorkspace(host, {
     // "1" (not false) so the layout can change in place later; top-level symbol/timeframe are every cell's default.
     layout: layout || "1", symbol: "lab:" + LabDefaultSymbol, timeframe: VELA_TF[LabDefaultTF], live: true,
-    // 1000 bars = 1 fast request on initial load (3M/6M/1Y buttons still fetch deeper history on demand).
-    bars: 1000,
+    // Fyers D1+ needs ~750 bars for EMA-200 strategies; crypto/intraday loads 1000 fast.
+    bars: (window.srcOf && window.srcOf(LabDefaultSymbol) === "fyers" && (LabTF.sec[LabDefaultTF] || 60) >= 86400) ? 3000 : 1000,
     theme: velaTheme(), upColor: HubTheme.up, downColor: HubTheme.down,
     providers: { lab: () => provider }, persist: false,
     // Inside the TradeX wrapper, symbol / timeframe / layout live in the wrapper's bar only (no duplicate controls).
