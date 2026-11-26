@@ -397,11 +397,11 @@ def history(symbol, tf, limit=1000, to_ms=None):
                     return hit[1]
             raise RuntimeError("Fyers rate limit cooldown (50 req/min); retrying shortly.")
         range_to = int(int(to_ms) // 1000) if to_ms else int(time.time())
-        chunks = 3 if tf in ("W1", "MN1") else 1
+        chunks = 3 if tf in ("D1", "W1", "MN1") else 1
         all_candles = []
         for idx in range(chunks):
-            c_to = range_to - idx * 365 * 86400
-            if c_to <= 0:
+            c_to = range_to - idx * 365 * 86400 - (1 if idx > 0 else 0)
+            if c_to <= 0 or len(all_candles) >= lim:
                 break
             max_span = 365 * 86400 if res == "D" else 95 * 86400
             wanted_span = max(lim * sec * 3, 7 * 86400)
@@ -438,10 +438,15 @@ def history(symbol, tf, limit=1000, to_ms=None):
             if not c_rows:
                 break
             all_candles = c_rows + all_candles
-        bars = [
-            {"time": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
-            for c in all_candles
-        ]
+        seen_t = set()
+        bars = []
+        for c in all_candles:
+            t = int(c[0])
+            if t in seen_t:
+                continue
+            seen_t.add(t)
+            bars.append({"time": t, "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])})
+        bars.sort(key=lambda b: b["time"])
         if tf in ("W1", "MN1"):
             bars = _agg_bars(bars, tf)
         bars = bars[-lim:]
