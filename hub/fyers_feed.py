@@ -431,6 +431,8 @@ def history(symbol, tf, limit=1000, to_ms=None):
                 if data.get("code") in (-15, -16, -17) or "token" in msg.lower():
                     with _lock:
                         _state["last_err"] = msg
+                if to_ms and ("invalid" in msg.lower() or "no data" in msg.lower()):
+                    break
                 if idx == 0:
                     raise RuntimeError(f"Fyers history error: {msg}")
                 break
