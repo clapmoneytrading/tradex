@@ -192,10 +192,16 @@ def fetch_stock(raw_symbol):
     chg_pct = f"{((cur_px - prev_px) / prev_px) * 100.0:.2f}%" if (cur_px is not None and prev_px not in (None, 0)) else None
 
     sym = normalize_symbol(cand.get("nseSymbol") or cand.get("symbol") or query)
+    sector = str(header.get("industryName") or "").strip() or None
+    if sector and sector.upper().startswith("NSE-"):
+        sector = sector[4:].strip()
     return {
         "symbol": sym,
         "ticker": f"NSE:{sym}-EQ",
         "stock_name": str(header.get("companyName") or cand.get("name") or sym).strip(),
+        "sector": sector,
+        "industry_group_rank": _fmt_val(header.get("industryGroupRank")),
+        "buyer_demand": _fmt_val(header.get("accDisRating")),
         "current_price": _fmt_val(header.get("currentPrice")),
         "change": chg_pct,
         "master_rank": _master_rank(header.get("masterScore")),
@@ -296,8 +302,8 @@ def refresh_all():
 def export_csv():
     rows = list_all()
     cols = [
-        "symbol", "stock_name", "current_price", "change",
-        "master_rank", "master_score", "eps_rating", "rs_rating",
+        "symbol", "stock_name", "sector", "industry_group_rank", "current_price", "change",
+        "master_rank", "master_score", "eps_rating", "rs_rating", "buyer_demand",
         "pe_ratio", "return_on_equity", "last_4_quarterly_earnings_percent",
         "eps_percent", "sales_cr", "sales_change_percent",
         "no_of_funds", "no_of_funds_percent", "shares_held_by_funds", "shares_held_by_funds_percent",

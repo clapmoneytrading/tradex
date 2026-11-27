@@ -34,6 +34,13 @@
   .price-box .px { font-size: 20px; font-weight: 700; font-family: var(--mono); }
   .pos { color: var(--ok); }
   .neg { color: var(--bad); }
+  .tier-green { color: #34d399; font-weight: 700; }
+  .tier-orange { color: #f59e0b; font-weight: 700; }
+  .tier-red { color: #f87171; font-weight: 700; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 4px; font-weight: 700; font-family: var(--mono); border: 1px solid transparent; }
+  .pill.tier-green { background: rgba(52,211,153,.15); border-color: rgba(52,211,153,.45); }
+  .pill.tier-orange { background: rgba(245,158,11,.15); border-color: rgba(245,158,11,.45); }
+  .pill.tier-red { background: rgba(248,113,113,.15); border-color: rgba(248,113,113,.45); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 8px; margin-bottom: 14px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; }
   .card span { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
@@ -97,6 +104,18 @@ function chgClass(v) {
   if (!Number.isFinite(n) || n === 0) return "";
   return n > 0 ? "pos" : "neg";
 }
+function scoreTier(v, greenMin = 80, orangeMin = 60) {
+  const n = parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+  if (!Number.isFinite(n)) return "";
+  return n >= greenMin ? "tier-green" : n >= orangeMin ? "tier-orange" : "tier-red";
+}
+function demandTier(v) {
+  const s = String(v || "").trim().toUpperCase();
+  if (!s) return "";
+  if (["A+", "A", "A-", "B+", "B"].includes(s)) return "tier-green";
+  if (["B-", "C+", "C"].includes(s)) return "tier-orange";
+  return "tier-red";
+}
 
 async function loadStock(sym) {
   const clean = normalizeSym(sym);
@@ -156,7 +175,7 @@ function render() {
       <div class="hero">
         <div>
           <h2>${esc(r.stock_name || r.symbol)} <span class="badge">${esc(r.symbol)}</span> ${r.master_rank ? `<span class="badge ${rankCls}">Rank ${esc(r.master_rank)} (${esc(r.master_score || "-")})</span>` : ""}</h2>
-          <div class="sub">Ticker: ${esc(r.ticker || "")} · Saved in hub/.cache/fundamentals.json</div>
+          <div class="sub">Sector: <b>${esc(r.sector || "-")}</b>${r.industry_group_rank ? ` (Group Rank ${esc(r.industry_group_rank)})` : ""} · Saved in hub/.cache/fundamentals.json</div>
         </div>
         <div class="price-box">
           <div class="px">₹${esc(r.current_price || "-")}</div>
@@ -164,10 +183,12 @@ function render() {
         </div>
       </div>
       <div class="grid">
-        <div class="card"><span>EPS Rating</span><b>${esc(r.eps_rating || "-")}</b></div>
-        <div class="card"><span>RS Rating</span><b>${esc(r.rs_rating || "-")}</b></div>
+        <div class="card"><span>EPS Strength</span><b class="${scoreTier(r.eps_rating, 80, 60)}">${esc(r.eps_rating || "-")}</b><small>80+ Green · 60-79 Orange · &lt;60 Red</small></div>
+        <div class="card"><span>Price Strength (RS)</span><b class="${scoreTier(r.rs_rating, 80, 60)}">${esc(r.rs_rating || "-")}</b><small>80+ Green · 60-79 Orange · &lt;60 Red</small></div>
+        <div class="card"><span>Buyer Demand</span><b class="pill ${demandTier(r.buyer_demand)}">${esc(r.buyer_demand || "-")}</b><small>A+..B Green · B-..C Orange · C-..E Red</small></div>
+        <div class="card"><span>Master Score</span><b class="${scoreTier(r.master_score, 80, 60)}">${esc(r.master_score || "-")}</b><small>Rank ${esc(r.master_rank || "-")}</small></div>
         <div class="card"><span>P/E Ratio</span><b>${esc(r.pe_ratio || "-")}</b></div>
-        <div class="card"><span>Return on Equity</span><b>${esc(r.return_on_equity || "-")}</b></div>
+        <div class="card"><span>Return on Equity</span><b class="${scoreTier(r.return_on_equity, 17, 10)}">${esc(r.return_on_equity || "-")}</b><small>17%+ Green · 10-16% Orange</small></div>
         <div class="card"><span>Last 4Q Avg EPS %</span><b class="${chgClass(r.last_4_quarterly_earnings_percent)}">${esc(r.last_4_quarterly_earnings_percent || "-")}</b></div>
         <div class="card"><span>Latest Qtr EPS %</span><b class="${chgClass(r.eps_percent)}">${esc(r.eps_percent || "-")}</b></div>
         <div class="card"><span>Latest Qtr Sales (Cr)</span><b>${esc(r.sales_cr || "-")}</b><small class="${chgClass(r.sales_change_percent)}">${esc(r.sales_change_percent || "-")}</small></div>
@@ -224,21 +245,23 @@ function render() {
     </div>
     <div class="status"><span>Showing ${filtered.length} of ${allRecords.length} stored NSE stocks</span><span id="refStatus"></span></div>
     ${filtered.length ? `<table><thead><tr>
-      <th data-s="symbol">Symbol</th><th data-s="stock_name">Company</th><th data-s="current_price">Price</th>
+      <th data-s="symbol">Symbol</th><th data-s="stock_name">Company</th><th data-s="sector">Sector</th><th data-s="current_price">Price</th>
       <th data-s="master_rank">Rank</th><th data-s="master_score">Score</th><th data-s="eps_rating">EPS</th>
-      <th data-s="rs_rating">RS</th><th data-s="pe_ratio">P/E</th><th data-s="return_on_equity">ROE</th>
+      <th data-s="rs_rating">RS</th><th data-s="buyer_demand">Buyer Demand</th><th data-s="pe_ratio">P/E</th><th data-s="return_on_equity">ROE</th>
       <th data-s="sales_change_percent">Sales %</th><th data-s="no_of_funds">Funds</th><th class="no-print"></th>
     </tr></thead><tbody>${
       filtered.map((r) => `<tr class="clickable" data-open="${esc(r.symbol)}">
         <td><b>${esc(r.symbol)}</b></td>
         <td>${esc(r.stock_name || "-")}</td>
+        <td>${esc(r.sector || "-")}</td>
         <td>₹${esc(r.current_price || "-")} <small class="${chgClass(r.change)}">${esc(r.change || "")}</small></td>
         <td>${r.master_rank ? `<span class="badge rank-${esc(r.master_rank)}">${esc(r.master_rank)}</span>` : "-"}</td>
-        <td>${esc(r.master_score || "-")}</td>
-        <td>${esc(r.eps_rating || "-")}</td>
-        <td>${esc(r.rs_rating || "-")}</td>
+        <td class="${scoreTier(r.master_score, 80, 60)}">${esc(r.master_score || "-")}</td>
+        <td class="${scoreTier(r.eps_rating, 80, 60)}">${esc(r.eps_rating || "-")}</td>
+        <td class="${scoreTier(r.rs_rating, 80, 60)}">${esc(r.rs_rating || "-")}</td>
+        <td><span class="pill ${demandTier(r.buyer_demand)}">${esc(r.buyer_demand || "-")}</span></td>
         <td>${esc(r.pe_ratio || "-")}</td>
-        <td>${esc(r.return_on_equity || "-")}</td>
+        <td class="${scoreTier(r.return_on_equity, 17, 10)}">${esc(r.return_on_equity || "-")}</td>
         <td class="${chgClass(r.sales_change_percent)}">${esc(r.sales_change_percent || "-")}</td>
         <td>${esc(r.no_of_funds || "-")}</td>
         <td class="no-print"><button type="button" class="btn" data-del="${esc(r.symbol)}" title="Remove">×</button></td>
