@@ -184,7 +184,7 @@ def _ensure_callback_listener():
             if code:
                 try:
                     exchange_auth_code(code)
-                    html = "<html><body style='font-family:sans-serif;background:#0f161d;color:#d6dee5;padding:30px'><h2>Fyers Connected!</h2><p>NSE Equities &amp; Indices are ready in TradeX. You can close this tab.</p><script>setTimeout(()=>window.close(),1500)</script></body></html>"
+                    html = "<html><body style='font-family:sans-serif;background:#0f161d;color:#d6dee5;padding:30px'><h2>Fyers Connected!</h2><p>NSE Equities &amp; Indices are ready in TradeGen. You can close this tab.</p><script>setTimeout(()=>window.close(),1500)</script></body></html>"
                     status_code = 200
                 except Exception as e:
                     html = f"<html><body style='font-family:sans-serif;background:#0f161d;color:#f87171;padding:30px'><h2>Fyers Login Error</h2><pre>{e}</pre></body></html>"

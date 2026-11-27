@@ -1278,7 +1278,7 @@ async def main():
     threading.Thread(target=binance_symbols_loop, daemon=True).start()
     threading.Thread(target=fyers_feed.symbols_loop, daemon=True).start()
     feedlog.start(FEED_HEALTH, ARM_PORT if REMOTE_ON else None, feed_status)
-    print(f"TradeX: open http://localhost:{HTTP_PORT}/hub.html  (data on ws://localhost:{WS_PORT})", flush=True)
+    print(f"TradeGen: open http://localhost:{HTTP_PORT}/hub.html  (data on ws://localhost:{WS_PORT})", flush=True)
     async with websockets.serve(handler, "127.0.0.1", WS_PORT, max_size=None):
         await asyncio.Future()
 
