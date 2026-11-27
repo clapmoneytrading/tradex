@@ -1085,6 +1085,32 @@ class LabHandler(SimpleHTTPRequestHandler):
                 return self._json({"ok": True, "auth_url": fyers_feed.login_url()}, 200)
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
+        if self.path.startswith("/api/fundamentals/list"):
+            import fundamentals
+            return self._json({"records": fundamentals.list_all()}, 200)
+        if self.path.startswith("/api/fundamentals/export"):
+            import fundamentals
+            from datetime import datetime, timezone
+            csv_bytes = fundamentals.export_csv()
+            fname = f"fundamentals-report-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(csv_bytes)
+            return
+        if self.path.startswith("/api/fundamentals"):
+            import fundamentals
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            sym = (q.get("symbol") or "").strip()
+            if not sym:
+                return self._json({"error": "symbol is required"}, 400)
+            try:
+                rec, total, existed, stale, err = fundamentals.lookup_and_save(sym)
+                return self._json({"record": rec, "total": total, "existed": existed, "stale": stale, "error": err}, 200)
+            except Exception as e:
+                return self._json({"error": str(e)}, 502)
         if self.path.startswith("/api/restart"):
             return self._json(restart_state, 200)
         if self.path.startswith("/api/logs"):
@@ -1189,7 +1215,7 @@ class LabHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         """Only /api/restart (Restart button) and /api/logs/journal (log panel).
         Same-origin JSON only, so another web page open in the browser cannot act through this local server."""
-        if not self.path.startswith(("/api/restart", "/api/logs/journal", "/api/fyers/config")):
+        if not self.path.startswith(("/api/restart", "/api/logs/journal", "/api/fyers/config", "/api/fundamentals/refresh", "/api/fundamentals/delete")):
             return self._json({"error": "not found"}, 404)
         origin = self.headers.get("Origin", "")
         if origin and origin not in (f"http://localhost:{HTTP_PORT}", f"http://127.0.0.1:{HTTP_PORT}"):
@@ -1202,6 +1228,17 @@ class LabHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/logs/journal"):
             self.rfile.read(n)
             return self._json({"ok": True}, 200)
+        if self.path.startswith("/api/fundamentals/refresh"):
+            import fundamentals
+            try:
+                return self._json(fundamentals.refresh_all(), 200)
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+        if self.path.startswith("/api/fundamentals/delete"):
+            import fundamentals
+            body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            removed, total = fundamentals.delete_symbol(body.get("symbol") or "")
+            return self._json({"ok": removed, "total": total}, 200)
         if self.path.startswith("/api/fyers/config"):
             body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             try:

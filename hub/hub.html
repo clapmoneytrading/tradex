@@ -206,6 +206,8 @@
   <span class="sep"></span>
   <div class="seg" id="engines" title="Chart engine"></div>
   <span class="sep"></span>
+  <button type="button" class="btn" id="btnFund" title="Open NSE Fundamental Details & Report">Fundamental</button>
+  <span class="sep"></span>
   <div class="qt-box" title="Paper Trading quick order">
     <button type="button" class="btn-sell" id="qtSell">Sell</button>
     <span class="qt-px" id="qtPrice">-</span>
@@ -389,6 +391,18 @@ async function init() {
   $("qtSell").onclick = () => window.TradingPanel && TradingPanel.placeOrder("short", 1);
   $("btnPaper").onclick = () => window.TradingPanel && TradingPanel.toggle("paper");
   $("btnStrat").onclick = () => window.TradingPanel && TradingPanel.toggle("strategy");
+  let fundWin = null;
+  const fundBc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("tradegen_fundamentals") : null;
+  $("btnFund").onclick = () => {
+    const sym = (window.getActiveMarket && window.getActiveMarket().ticker) || (window.st && window.st.ticker) || "";
+    const url = "fundamentals.html?symbol=" + encodeURIComponent(sym);
+    if (fundWin && !fundWin.closed) {
+      fundWin.focus();
+      if (fundBc) fundBc.postMessage({ symbol: sym });
+    } else {
+      fundWin = window.open(url, "tradegen_fundamentals", "width=940,height=680,resizable=yes,scrollbars=yes");
+    }
+  };
   $("exportCsv").onclick = () => {
     const a = document.createElement("a");
     a.href = `/api/export.csv?source=${encodeURIComponent(st.broker)}&symbol=${encodeURIComponent(st.ticker)}&tf=${encodeURIComponent(st.tf)}&limit=5000`;
