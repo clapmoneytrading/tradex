@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "buildCommand": "",
+  "outputDirectory": "hub",
+  "rewrites": [
+    { "source": "/api/symbols", "destination": "/api/symbols" },
+    { "source": "/api/bars",    "destination": "/api/bars"    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ]
+}
