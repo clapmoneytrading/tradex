@@ -1085,6 +1085,9 @@ class LabHandler(SimpleHTTPRequestHandler):
                 return self._json({"ok": True, "auth_url": fyers_feed.login_url()}, 200)
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
+        if self.path.startswith("/api/fundamentals/scan/status"):
+            import fundamentals
+            return self._json(fundamentals.scan_status(), 200)
         if self.path.startswith("/api/fundamentals/list"):
             import fundamentals
             return self._json({"records": fundamentals.list_all()}, 200)
@@ -1215,7 +1218,7 @@ class LabHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         """Only /api/restart (Restart button) and /api/logs/journal (log panel).
         Same-origin JSON only, so another web page open in the browser cannot act through this local server."""
-        if not self.path.startswith(("/api/restart", "/api/logs/journal", "/api/fyers/config", "/api/fundamentals/refresh", "/api/fundamentals/delete")):
+        if not self.path.startswith(("/api/restart", "/api/logs/journal", "/api/fyers/config", "/api/fundamentals/refresh", "/api/fundamentals/delete", "/api/fundamentals/scan/start", "/api/fundamentals/scan/stop")):
             return self._json({"error": "not found"}, 404)
         origin = self.headers.get("Origin", "")
         if origin and origin not in (f"http://localhost:{HTTP_PORT}", f"http://127.0.0.1:{HTTP_PORT}"):
@@ -1228,6 +1231,13 @@ class LabHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/logs/journal"):
             self.rfile.read(n)
             return self._json({"ok": True}, 200)
+        if self.path.startswith("/api/fundamentals/scan/start"):
+            import fundamentals
+            body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            return self._json(fundamentals.start_scan(limit=body.get("limit", 50), symbols=body.get("symbols")), 200)
+        if self.path.startswith("/api/fundamentals/scan/stop"):
+            import fundamentals
+            return self._json(fundamentals.stop_scan(), 200)
         if self.path.startswith("/api/fundamentals/refresh"):
             import fundamentals
             try:

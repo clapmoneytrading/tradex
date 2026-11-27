@@ -318,3 +318,63 @@ def export_csv():
     for r in rows:
         w.writerow([r.get(c, "") or "" for c in cols])
     return buf.getvalue().encode("utf-8")
+
+
+_scan_lock = threading.Lock()
+_scan_state = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0, "current": "", "stop": False}
+
+
+def scan_status():
+    with _scan_lock:
+        return dict(_scan_state)
+
+
+def stop_scan():
+    with _scan_lock:
+        _scan_state["stop"] = True
+        return dict(_scan_state)
+
+
+def start_scan(limit=50, symbols=None):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with _scan_lock:
+        if _scan_state["running"]:
+            return dict(_scan_state)
+        if symbols:
+            targets = [normalize_symbol(s) for s in symbols if normalize_symbol(s)]
+        else:
+            import fyers_feed
+            eqs = [s["ticker"] for s in (fyers_feed.symbols_cache or []) if s.get("group") == "nse-eq"]
+            if not eqs:
+                eqs = [t for t, _, g in fyers_feed.FALLBACK_NSE if g == "nse-eq"]
+            targets = [normalize_symbol(t) for t in eqs[: max(1, min(500, int(limit or 50)))]]
+        _scan_state.update({"running": True, "total": len(targets), "done": 0, "ok": 0, "errors": 0, "current": "", "stop": False})
+
+    def _run():
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futs = {}
+                for sym in targets:
+                    with _scan_lock:
+                        if _scan_state["stop"]:
+                            break
+                    futs[pool.submit(lookup_and_save, sym)] = sym
+                for fut in as_completed(futs):
+                    sym = futs[fut]
+                    ok_inc, err_inc = 0, 0
+                    try:
+                        fut.result()
+                        ok_inc = 1
+                    except Exception:
+                        err_inc = 1
+                    with _scan_lock:
+                        _scan_state["done"] += 1
+                        _scan_state["ok"] += ok_inc
+                        _scan_state["errors"] += err_inc
+                        _scan_state["current"] = sym
+        finally:
+            with _scan_lock:
+                _scan_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return scan_status()

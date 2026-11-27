@@ -206,7 +206,8 @@
   <span class="sep"></span>
   <div class="seg" id="engines" title="Chart engine"></div>
   <span class="sep"></span>
-  <button type="button" class="btn" id="btnFund" title="Open NSE Fundamental Details & Report">Fundamental</button>
+  <button type="button" class="btn" id="btnFund" title="Open NSE Fundamental Details">Fundamental</button>
+  <button type="button" class="btn" id="btnScan" title="Open Full NSE Stock Scanner &amp; Fundamental Reports">Scanner</button>
   <span class="sep"></span>
   <div class="qt-box" title="Paper Trading quick order">
     <button type="button" class="btn-sell" id="qtSell">Sell</button>
@@ -391,7 +392,7 @@ async function init() {
   $("qtSell").onclick = () => window.TradingPanel && TradingPanel.placeOrder("short", 1);
   $("btnPaper").onclick = () => window.TradingPanel && TradingPanel.toggle("paper");
   $("btnStrat").onclick = () => window.TradingPanel && TradingPanel.toggle("strategy");
-  let fundWin = null;
+  let fundWin = null, scanWin = null;
   const fundBc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("tradegen_fundamentals") : null;
   $("btnFund").onclick = () => {
     const sym = (window.getActiveMarket && window.getActiveMarket().ticker) || (window.st && window.st.ticker) || "";
@@ -402,6 +403,11 @@ async function init() {
     } else {
       fundWin = window.open(url, "tradegen_fundamentals", "width=940,height=680,resizable=yes,scrollbars=yes");
     }
+  };
+  $("btnScan").onclick = () => {
+    const url = "fundamentals.html?view=report";
+    if (scanWin && !scanWin.closed) scanWin.focus();
+    else scanWin = window.open(url, "tradegen_scanner", "width=1320,height=840,resizable=yes,scrollbars=yes");
   };
   $("exportCsv").onclick = () => {
     const a = document.createElement("a");
