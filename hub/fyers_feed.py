@@ -57,6 +57,7 @@ _state = {
     "secret_key": os.environ.get("FYERS_SECRET_KEY", "").strip(),
     "redirect_uri": os.environ.get("FYERS_REDIRECT_URI", "http://127.0.0.1:8502/").strip() or "http://127.0.0.1:8502/",
     "access_token": os.environ.get("FYERS_ACCESS_TOKEN", "").strip(),
+    "token_expired": False,
     "last_err": "",
 }
 _cb_server = {"srv": None}
@@ -97,10 +98,11 @@ def _save_token():
 def status():
     with _lock:
         has_creds = bool(_state["app_id"] and _state["secret_key"])
-        connected = bool(_state["app_id"] and _state["access_token"])
+        connected = bool(_state["app_id"] and _state["access_token"] and not _state.get("token_expired"))
         return {
             "configured": has_creds,
             "connected": connected,
+            "token_expired": bool(_state.get("token_expired")),
             "app_id": _state["app_id"],
             "redirect_uri": _state["redirect_uri"],
             "symbols": len(symbols_cache),
@@ -118,6 +120,7 @@ def configure(app_id=None, secret_key=None, redirect_uri=None, access_token=None
             _state["redirect_uri"] = redirect_uri.strip()
         if access_token is not None:
             _state["access_token"] = access_token.strip()
+            _state["token_expired"] = False
         _state["last_err"] = ""
         _save_token()
     return status()
@@ -161,6 +164,7 @@ def exchange_auth_code(auth_code):
         raise RuntimeError(f"Fyers auth failed: {msg}")
     with _lock:
         _state["access_token"] = res["access_token"]
+        _state["token_expired"] = False
         _state["last_err"] = ""
         _save_token()
     return status()
@@ -333,6 +337,16 @@ def _is_rate_limit(msg):
     return "limit" in m or "too many" in m or "429" in m
 
 
+def _check_auth_err(data):
+    msg = data.get("message") or str(data)
+    if data.get("code") in (-15, -16, -17) or "token" in msg.lower():
+        with _lock:
+            _state["token_expired"] = True
+            _state["last_err"] = "Fyers session expired — open Feeds -> Save & Login to reconnect."
+        return True
+    return False
+
+
 def _agg_bars(bars, tf):
     from datetime import datetime, timezone
     out = []
@@ -435,9 +449,8 @@ def history(symbol, tf, limit=1000, to_ms=None, from_sec=None):
                     with _hist_lock:
                         if hit:
                             return hit[1]
-                if data.get("code") in (-15, -16, -17) or "token" in msg.lower():
-                    with _lock:
-                        _state["last_err"] = msg
+                if _check_auth_err(data):
+                    pass
                 if to_ms and ("invalid" in msg.lower() or "no data" in msg.lower()):
                     break
                 if idx == 0:
@@ -493,6 +506,7 @@ def _quote_loop():
                     timeout=10,
                 )
                 if data.get("s") != "ok":
+                    _check_auth_err(data)
                     if _is_rate_limit(data.get("message")):
                         _rate_until = time.time() + 65
                     break
@@ -532,9 +546,16 @@ async def stream(ws, symbol, tf, record_tick, true_now_ms):
     cur = dict(bars[-1]) if bars else None
     last_vol = None
     last_seen = None
+    auth_warned = False
     try:
         while True:
             await asyncio.sleep(1.0)
+            if _state.get("token_expired"):
+                if not auth_warned:
+                    auth_warned = True
+                    await ws.send(json.dumps({"type": "status", "msg": _state["last_err"] or "Fyers session expired — open Feeds -> Save & Login to reconnect."}))
+                continue
+            auth_warned = False
             with _quote_lock:
                 q = _quote_cache.get(symbol)
             if not q or q.get("lp") is None:
