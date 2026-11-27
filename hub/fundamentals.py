@@ -195,13 +195,16 @@ def fetch_stock(raw_symbol):
     sector = str(header.get("industryName") or "").strip() or None
     if sector and sector.upper().startswith("NSE-"):
         sector = sector[4:].strip()
+    desc = str(header.get("formattedDescription") or "").strip() or None
     return {
         "symbol": sym,
         "ticker": f"NSE:{sym}-EQ",
         "stock_name": str(header.get("companyName") or cand.get("name") or sym).strip(),
         "sector": sector,
         "industry_group_rank": _fmt_val(header.get("industryGroupRank")),
+        "description": desc,
         "buyer_demand": _fmt_val(header.get("accDisRating")),
+        "market_cap": _fmt_crore(header.get("marketCap")),
         "current_price": _fmt_val(header.get("currentPrice")),
         "change": chg_pct,
         "master_rank": _master_rank(header.get("masterScore")),

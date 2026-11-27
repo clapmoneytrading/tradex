@@ -173,9 +173,10 @@ function render() {
         <span>Updated: ${esc(fmtDate(r.updated_at))}</span>
       </div>
       <div class="hero">
-        <div>
+        <div style="flex:1;min-width:240px">
           <h2>${esc(r.stock_name || r.symbol)} <span class="badge">${esc(r.symbol)}</span> ${r.master_rank ? `<span class="badge ${rankCls}">Rank ${esc(r.master_rank)} (${esc(r.master_score || "-")})</span>` : ""}</h2>
-          <div class="sub">Sector: <b>${esc(r.sector || "-")}</b>${r.industry_group_rank ? ` (Group Rank ${esc(r.industry_group_rank)})` : ""} · Saved in hub/.cache/fundamentals.json</div>
+          <div class="sub">Sector: <b>${esc(r.sector || "-")}</b>${r.industry_group_rank ? ` (Group Rank ${esc(r.industry_group_rank)})` : ""}${r.market_cap ? ` · MCap: <b>₹${esc(r.market_cap)}</b>` : ""}</div>
+          ${r.description ? `<div class="sub" style="margin-top:6px;line-height:1.45">${esc(r.description)}</div>` : ""}
         </div>
         <div class="price-box">
           <div class="px">₹${esc(r.current_price || "-")}</div>
@@ -183,12 +184,12 @@ function render() {
         </div>
       </div>
       <div class="grid">
-        <div class="card"><span>EPS Strength</span><b class="${scoreTier(r.eps_rating, 80, 60)}">${esc(r.eps_rating || "-")}</b><small>80+ Green · 60-79 Orange · &lt;60 Red</small></div>
-        <div class="card"><span>Price Strength (RS)</span><b class="${scoreTier(r.rs_rating, 80, 60)}">${esc(r.rs_rating || "-")}</b><small>80+ Green · 60-79 Orange · &lt;60 Red</small></div>
-        <div class="card"><span>Buyer Demand</span><b class="pill ${demandTier(r.buyer_demand)}">${esc(r.buyer_demand || "-")}</b><small>A+..B Green · B-..C Orange · C-..E Red</small></div>
-        <div class="card"><span>Master Score</span><b class="${scoreTier(r.master_score, 80, 60)}">${esc(r.master_score || "-")}</b><small>Rank ${esc(r.master_rank || "-")}</small></div>
+        <div class="card"><span>EPS Strength</span><b class="${scoreTier(r.eps_rating, 80, 60)}">${esc(r.eps_rating || "-")}</b></div>
+        <div class="card"><span>Price Strength (RS)</span><b class="${scoreTier(r.rs_rating, 80, 60)}">${esc(r.rs_rating || "-")}</b></div>
+        <div class="card"><span>Buyer Demand</span><b class="pill ${demandTier(r.buyer_demand)}">${esc(r.buyer_demand || "-")}</b></div>
+        <div class="card"><span>Master Score</span><b class="${scoreTier(r.master_score, 80, 60)}">${esc(r.master_score || "-")}</b></div>
         <div class="card"><span>P/E Ratio</span><b>${esc(r.pe_ratio || "-")}</b></div>
-        <div class="card"><span>Return on Equity</span><b class="${scoreTier(r.return_on_equity, 17, 10)}">${esc(r.return_on_equity || "-")}</b><small>17%+ Green · 10-16% Orange</small></div>
+        <div class="card"><span>Return on Equity</span><b class="${scoreTier(r.return_on_equity, 17, 10)}">${esc(r.return_on_equity || "-")}</b></div>
         <div class="card"><span>Last 4Q Avg EPS %</span><b class="${chgClass(r.last_4_quarterly_earnings_percent)}">${esc(r.last_4_quarterly_earnings_percent || "-")}</b></div>
         <div class="card"><span>Latest Qtr EPS %</span><b class="${chgClass(r.eps_percent)}">${esc(r.eps_percent || "-")}</b></div>
         <div class="card"><span>Latest Qtr Sales (Cr)</span><b>${esc(r.sales_cr || "-")}</b><small class="${chgClass(r.sales_change_percent)}">${esc(r.sales_change_percent || "-")}</small></div>
