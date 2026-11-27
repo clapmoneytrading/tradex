@@ -110,7 +110,7 @@ async function addRow(r) {
   else if (r.src === "mine") { const m = MINE.find((x) => x.id === r.mineId); if (!m) return; ind = { key: `own:${m.id}:${stamp}`, mineId: m.id, name: m.name, origin: "own", source: m.source, pane: curPane, on: true }; }
   else return flash("This script is not available here.", true);
   ind.rowId = r.id; INDS.push(ind); saveInds(); flash("Adding to the chart...");
-  if (!["vela", "klinechart", "lightweight"].includes(st.engine)) flash("Pine draws on Vela, KLineChart, or Lightweight: switching to Vela...");
+  if (!["vela", "lightweight"].includes(st.engine)) flash("Pine draws on Vela or Lightweight: switching to Vela...");
   pineAdd(ind);  // on another engine this switches to Vela, which then draws every indicator that is on
 }
 // Results land here (via indChanged) and show on the row that added them.

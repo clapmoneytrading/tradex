@@ -47,7 +47,7 @@ function edSave() {
 }
 function edAdd() {
   edSave(); const m = MINE.find((x) => x.id === ED.id);
-  if (!["vela", "klinechart", "lightweight"].includes(st.engine)) return edLog("Pine draws on Vela, KLineChart, or Lightweight. Switch the engine, then Add to chart.", true);
+  if (!["vela", "lightweight"].includes(st.engine)) return edLog("Pine draws on Vela or Lightweight. Switch the engine, then Add to chart.", true);
   // the editor's script replaces its previous instance on the chart (like TradingView's "Update on chart")
   const curPane = typeof activePane === "number" ? activePane : 0;
   INDS.filter((x) => x.mineId === m.id && (x.pane || 0) === curPane).forEach((x) => removeInd(x));

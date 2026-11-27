@@ -15,7 +15,8 @@
 <div id="top"><b>TradeGen</b> <span style="color:#93a2af">Vela engine</span>
   <select id="layout"><option value="">1 chart</option><option value="2h">2 side by side</option><option value="2v">2 stacked</option><option value="4">4 charts</option><option value="8">8 charts</option></select>
   <span style="color:#93a2af">Tips: type a letter for symbol search, a digit for timeframe, ? for all shortcuts. Drag pane borders to resize.</span>
-  <button id="auto">Code trendline</button></div>
+  <button id="auto">Code trendline</button>
+  <button id="autosr">Auto S&amp;R</button></div>
 <div id="chart"></div>
 <script src="vela.bundle.js"></script>
 <script src="theme.js"></script>
@@ -140,6 +141,10 @@ class HubPineEngine extends VelaLab.PineWorkerEngine {
 if (LabEmbedded && VelaLab.registerWidgetAction) {
   VelaLab.registerWidgetAction({ id: "indicators", target: "topbar", align: "left", label: "Indicators", icon: "indicators",
     run: () => window.parent.postMessage({ evt: "indicators:open" }, location.origin) });
+  VelaLab.registerWidgetAction({ id: "auto-sr", target: "topbar", align: "left", label: "S&R",
+    run: () => toggleAutoSR() });
+  VelaLab.registerWidgetAction({ id: "auto-trend", target: "topbar", align: "left", label: "Trendline",
+    run: () => addCodeTrendline() });
 }
 // ---- Theme (TradeX settings) ----
 // hexA() comes from theme.js
@@ -190,7 +195,7 @@ function build(layout) {
     theme: velaTheme(), upColor: HubTheme.up, downColor: HubTheme.down,
     providers: { lab: () => provider }, persist: false,
     // Inside the TradeX wrapper, symbol / timeframe / layout live in the wrapper's bar only (no duplicate controls).
-    ...(LabEmbedded ? { topbar: { left: ["style", "indicators", "undo-redo"] } } : {}),
+    ...(LabEmbedded ? { topbar: { left: ["style", "indicators", "undo-redo", "auto-sr", "auto-trend"] } } : {}),
     // Pine Script runs in its own worker per chart (PineTS via @luxalgo/vela-pinets), so heavy scripts never freeze the chart.
     engines: { pine: () => new HubPineEngine() },
   });
@@ -253,6 +258,39 @@ function addCodeTrendline() {
   return ws.chart.drawings.add("trendline", { paneId: "price", anchors: [{ time: a.time, price: a.low }, { time: c.time, price: c.low }] });
 }
 document.getElementById("auto").onclick = addCodeTrendline;
+let srIds = [];
+function toggleAutoSR() {
+  if (srIds.length) {
+    srIds.forEach((id) => { try { ws.chart.drawings.remove(id); } catch (_) {} });
+    srIds = [];
+    return [];
+  }
+  const b = lastBars, n = b.length; if (n < 30) return [];
+  const from = Math.max(3, n - 220), pivots = [];
+  for (let i = from; i < n - 3; i++) {
+    if (b[i].high > b[i-1].high && b[i].high > b[i-2].high && b[i].high > b[i+1].high && b[i].high > b[i+2].high) pivots.push(b[i].high);
+    if (b[i].low < b[i-1].low && b[i].low < b[i-2].low && b[i].low < b[i+1].low && b[i].low < b[i+2].low) pivots.push(b[i].low);
+  }
+  if (!pivots.length) return [];
+  const lastClose = b[n - 1].close, tol = lastClose * 0.006, clusters = [];
+  pivots.forEach((p) => {
+    const c = clusters.find((x) => Math.abs(x.avg - p) <= tol);
+    if (c) { c.sum += p; c.count++; c.avg = c.sum / c.count; }
+    else clusters.push({ sum: p, count: 1, avg: p });
+  });
+  clusters.sort((a, b2) => b2.count - a.count || Math.abs(a.avg - lastClose) - Math.abs(b2.avg - lastClose));
+  const res = clusters.filter((c) => c.avg > lastClose).slice(0, 3);
+  const sup = clusters.filter((c) => c.avg <= lastClose).slice(0, 3);
+  const anchorTime = b[n - 1].time;
+  [...res, ...sup].forEach((c) => {
+    try {
+      const id = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: c.avg }] });
+      if (id) srIds.push(id);
+    } catch (_) {}
+  });
+  return srIds;
+}
+document.getElementById("autosr").onclick = toggleAutoSR;
 window.labChart = {
   name: "vela",
   // Switch in place: indicators re-run on the new bars; panes, drawings and settings stay.

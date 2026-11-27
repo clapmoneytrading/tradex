@@ -242,7 +242,7 @@
 // TradeX: one shell over every broker and every chart engine.
 // Broker switch keeps the instrument (gold stays gold); engine switch keeps instrument, broker and timeframe.
 // Multi-pane: each pane has its own symbol+timeframe; pane 0 is the "main" one driven by the top bar.
-const ENGINES = [["vela", "Vela"], ["lightweight", "Lightweight"], ["klinechart", "KLineChart"]];
+const ENGINES = [["vela", "Vela"], ["lightweight", "Lightweight"]];
 const TFS = [["M1", "1m"], ["M5", "5m"], ["M15", "15m"], ["M30", "30m"], ["H1", "1H"], ["H2", "2H"], ["H4", "4H"], ["D1", "D"], ["W1", "W"], ["MN1", "M"]];
 const SHORT = { arm: "RMT", bybit: "BYB", deriv: "DER", mt5: "MT5", binance: "BIN", fyers: "NSE" };
 const $ = (id) => document.getElementById(id);
@@ -251,6 +251,7 @@ let st = { engine: "vela", key: "XAUUSD", broker: "deriv", ticker: "frxXAUUSD", 
 window.st = st;
 window.getActiveMarket = () => ({ ticker: st.ticker, tf: st.tf, broker: st.broker });
 try { Object.assign(st, JSON.parse(localStorage.getItem("chartHub") || "{}")); } catch (_) {}
+if (!["vela", "lightweight"].includes(st.engine)) st.engine = "vela";
 const save = () => { try { localStorage.setItem("chartHub", JSON.stringify(st)); } catch (_) {} };
 const inst = (k) => DATA.instruments.find((i) => i.key === k);
 

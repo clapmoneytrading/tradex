@@ -40,7 +40,7 @@ function prepared(ind) {
 // Pine and Vela-native indicators draw only on the Vela engine. On another engine an indicator stays on and waits
 // (auto = reload after an engine switch); a user who adds one there is taken to Vela, where it draws.
 async function pineAdd(ind, auto) {
-  if (typeof st !== "undefined" && (ind.kind === "native" ? st.engine !== "vela" : !["vela", "klinechart", "lightweight"].includes(st.engine))) {
+  if (typeof st !== "undefined" && (ind.kind === "native" ? st.engine !== "vela" : !["vela", "lightweight"].includes(st.engine))) {
     if (auto) { ind.wait = true; indChanged(); return; }
     ind.wait = false; ind.on = true; saveInds();
     st.engine = "vela"; save(); paint(); loadEngine();   // the fresh Vela page re-adds every indicator that is on
