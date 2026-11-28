@@ -242,7 +242,47 @@ function build(layout) {
   window.lastRuns = {};
   try { ws.chart.on("script:run", (ev) => { if (ev && ev.id) window.lastRuns[ev.id] = { plots: ev.plots || {}, bar: ev.bar, warnings: (ev.warnings || []).length, at: Date.now() }; }); } catch (_) {}
   try { ws.chart.on("indicator:removed", (ev) => { if (LabEmbedded && ev && ev.id) window.parent.postMessage({ evt: "ind:removed", id: ev.id }, location.origin); }); } catch (_) {}
+  try {
+    ws.chart.on("drawing:edited", (ev) => {
+      const id = ev && ev.id;
+      if (!id || !paperLines.has(id)) return;
+      const meta = paperLines.get(id);
+      const d = (ws.chart.drawings.list() || []).find((x) => x.id === id);
+      const np = d && d.anchors && d.anchors[0] ? Number(d.anchors[0].price) : NaN;
+      if (!Number.isFinite(np)) return;
+      if (meta.field === "entry") {
+        // Keep Entry line fixed at actual entry price
+        setPaperLines(lastPaperCfg);
+        return;
+      }
+      meta.price = np;
+      if (LabEmbedded) window.parent.postMessage({ evt: "paper:update", posId: meta.posId, field: meta.field, price: np }, location.origin);
+    });
+  } catch (_) {}
   ws.chart.on("market:changed", ({ symbol, timeframe }) => LabNotify(String(symbol || "").replace(/^lab:/, ""), LabTF.fromAny(timeframe || "1")));
+  if (lastPaperCfg) setTimeout(() => setPaperLines(lastPaperCfg), 500);
+}
+const paperLines = new Map();
+let lastPaperCfg = null;
+function setPaperLines(cfg) {
+  lastPaperCfg = cfg || null;
+  if (!ws || !ws.chart || !ws.chart.drawings) return;
+  for (const id of paperLines.keys()) { try { ws.chart.drawings.remove(id); } catch (_) {} }
+  paperLines.clear();
+  if (!cfg || !Array.isArray(cfg.positions) || !cfg.positions.length) return;
+  const anchorTime = (lastBars.length ? lastBars[lastBars.length - 1].time : Date.now());
+  const addLvl = (posId, field, price, color, label) => {
+    if (!Number.isFinite(Number(price)) || Number(price) <= 0) return;
+    try {
+      const id = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: Number(price) }], style: { color, lineWidth: 2, lineStyle: field === "entry" ? "solid" : "dashed" }, text: label });
+      if (id) paperLines.set(id, { posId, field, price: Number(price) });
+    } catch (_) {}
+  };
+  cfg.positions.forEach((p) => {
+    if (cfg.showEntry) addLvl(p.id, "entry", p.entryPrice, "#38bdf8", `${p.side === "long" ? "LONG" : "SHORT"} @ ${p.entryPrice}`);
+    if (cfg.showSL && p.sl) addLvl(p.id, "sl", p.sl, "#f87171", `SL ${p.sl}`);
+    if (cfg.showTP && p.tp) addLvl(p.id, "tp", p.tp, "#34d399", `TP ${p.tp}`);
+  });
 }
 build("");
 document.getElementById("layout").onchange = (e) => build(e.target.value);
@@ -331,6 +371,7 @@ window.labChart = {
   setMarket: (symbol, tf) => (window.LabDefaultSymbol = symbol, window.LabDefaultTF = tf || LabDefaultTF, ws.chart.setMarket({ symbol: "lab:" + symbol, timeframe: VELA_TF[tf] || "1" })),
   setTF: (t) => ws.chart.setTimeframe ? ws.chart.setTimeframe(VELA_TF[t]) : null,
   addCodeTrendline,
+  setPaperLines,
   drawingCount: () => { try { return ws.chart.drawings.list().length; } catch (_) { return -1; } },
   barCount: () => lastBars.length,
 };

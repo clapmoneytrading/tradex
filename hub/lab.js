@@ -134,6 +134,7 @@ window.addEventListener("message", (e) => {
   if (e.data.cmd === "native:list") { if (!labChart.natives) answer({ ok: false, list: [] }); else labChart.natives().then((list) => answer({ ok: true, list }), (err) => answer({ ok: false, list: [], error: String(err) })); }
   if (e.data.cmd === "native:add") answer(labChart.addNative ? labChart.addNative(e.data.type, e.data.inputs) : { ok: false, error: "Vela only" });
   if (e.data.cmd === "chart:list") answer({ ok: true, list: labChart.onChart ? labChart.onChart() : [] });
+  if (e.data.cmd === "paper:lines" && labChart.setPaperLines) labChart.setPaperLines(e.data);
   if (e.data.cmd === "theme") { if (window.HubThemeApply) HubThemeApply(); if (labChart.applyTheme) labChart.applyTheme(); }
 });
 

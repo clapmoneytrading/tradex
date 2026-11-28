@@ -15,12 +15,42 @@ window.TradingPanel = (() => {
   function loadState() {
     try {
       const d = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-      if (d && typeof d.balance === "number") return d;
+      if (d && typeof d.balance === "number") {
+        if (!d.lines) d.lines = { entry: true, sl: true, tp: true };
+        return d;
+      }
     } catch (_) {}
-    return { balance: DEFAULT_CAP, realizedPnl: 0, positions: [], history: [] };
+    return { balance: DEFAULT_CAP, realizedPnl: 0, positions: [], history: [], lines: { entry: true, sl: true, tp: true } };
   }
   function saveState() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+
+  function syncLines() {
+    if (typeof window.syncPaperLinesToFrames !== "function") return;
+    const lc = state.lines || { entry: true, sl: true, tp: true };
+    const bySym = {};
+    state.positions.forEach((p) => {
+      if (!bySym[p.symbol]) bySym[p.symbol] = { symbol: p.symbol, positions: [], showEntry: !!lc.entry, showSL: !!lc.sl, showTP: !!lc.tp };
+      bySym[p.symbol].positions.push({ id: p.id, side: p.side, entryPrice: p.entryPrice, sl: p.sl, tp: p.tp });
+    });
+    window.syncPaperLinesToFrames(bySym);
+  }
+
+  function updateLevels(posId, field, newPrice) {
+    const p = state.positions.find((x) => x.id === posId);
+    if (!p || (field !== "sl" && field !== "tp")) return;
+    if (newPrice == null || newPrice === "" || Number(newPrice) <= 0) {
+      p[field] = null;
+    } else {
+      const n = Number(newPrice);
+      if (!Number.isFinite(n)) return;
+      const dec = p.entryPrice < 10 ? 4 : 2;
+      p[field] = Number(n.toFixed(dec));
+    }
+    saveState();
+    syncLines();
+    if (bottomOpen && activeMainTab === "paper") render();
   }
 
   const curSym = () => (window.getActiveMarket && window.getActiveMarket().ticker) || (window.st && window.st.ticker) || "BTCUSD";
@@ -69,15 +99,17 @@ window.TradingPanel = (() => {
       pct: p.entryPrice ? (pnl / (p.entryPrice * p.qty)) * 100 : 0,
       openedAt: p.openedAt,
       closedAt: Date.now(),
+      entryReason: p.entryReason || "",
       reason,
     });
     if (state.history.length > 200) state.history.length = 200;
     state.positions.splice(idx, 1);
     saveState();
+    syncLines();
     render();
   }
 
-  function placeOrder(side, qtyInput, slInput, tpInput) {
+  function placeOrder(side, qtyInput, slInput, tpInput, reasonInput) {
     const sym = curSym();
     const px = prices[sym];
     if (!Number.isFinite(px) || px <= 0) {
@@ -87,6 +119,8 @@ window.TradingPanel = (() => {
     const qty = Math.max(0.0001, Number(qtyInput) || 1);
     const sl = slInput ? Number(slInput) : null;
     const tp = tpInput ? Number(tpInput) : null;
+    const rEl = document.getElementById("ptReason");
+    const entryReason = String(reasonInput != null ? reasonInput : (rEl ? rEl.value : "")).trim();
 
     // Check if there is an existing position on the same symbol
     const oppSide = side === "long" ? "short" : "long";
@@ -97,7 +131,7 @@ window.TradingPanel = (() => {
         const rem = qty - opp.qty;
         closePosition(opp.id, px, "Reverse/Close");
         if (rem > 1e-8) {
-          state.positions.unshift({ id: Date.now() + Math.random(), symbol: sym, side, qty: rem, entryPrice: px, sl, tp, openedAt: Date.now() });
+          state.positions.unshift({ id: Date.now() + Math.random(), symbol: sym, side, qty: rem, entryPrice: px, sl, tp, entryReason, openedAt: Date.now() });
         }
       } else {
         const pnl = (opp.side === "long" ? px - opp.entryPrice : opp.entryPrice - px) * qty;
@@ -106,7 +140,7 @@ window.TradingPanel = (() => {
         opp.qty -= qty;
         state.history.unshift({
           id: Date.now(), symbol: sym, side: opp.side, qty, entryPrice: opp.entryPrice, exitPrice: px, pnl,
-          pct: opp.entryPrice ? (pnl / (opp.entryPrice * qty)) * 100 : 0, openedAt: opp.openedAt, closedAt: Date.now(), reason: "Partial Close",
+          pct: opp.entryPrice ? (pnl / (opp.entryPrice * qty)) * 100 : 0, openedAt: opp.openedAt, closedAt: Date.now(), entryReason: opp.entryReason || "", reason: "Partial Close",
         });
       }
     } else {
@@ -117,18 +151,22 @@ window.TradingPanel = (() => {
         same.qty = tot;
         if (sl) same.sl = sl;
         if (tp) same.tp = tp;
+        if (entryReason) same.entryReason = entryReason;
       } else {
-        state.positions.unshift({ id: Date.now() + Math.random(), symbol: sym, side, qty, entryPrice: px, sl, tp, openedAt: Date.now() });
+        state.positions.unshift({ id: Date.now() + Math.random(), symbol: sym, side, qty, entryPrice: px, sl, tp, entryReason, openedAt: Date.now() });
       }
     }
+    if (rEl) rEl.value = "";
     saveState();
+    syncLines();
     if (!bottomOpen) open("paper");
     else render();
   }
 
   function resetAccount() {
-    state = { balance: DEFAULT_CAP, realizedPnl: 0, positions: [], history: [] };
+    state = { balance: DEFAULT_CAP, realizedPnl: 0, positions: [], history: [], lines: state.lines || { entry: true, sl: true, tp: true } };
     saveState();
+    syncLines();
     render();
   }
 
@@ -361,6 +399,7 @@ window.TradingPanel = (() => {
 
     const body = document.getElementById("tpBody");
     if (activeMainTab === "paper") {
+      const lc = state.lines || { entry: true, sl: true, tp: true };
       body.innerHTML = `
         <div class="pt-bar">
           <div class="pt-stats">
@@ -374,6 +413,7 @@ window.TradingPanel = (() => {
             <label>Qty <input id="ptQty" type="number" min="0.001" step="any" value="1"></label>
             <label>SL <input id="ptSL" type="number" step="any" placeholder="Optional"></label>
             <label>TP <input id="ptTP" type="number" step="any" placeholder="Optional"></label>
+            <label>Reason <input id="ptReason" class="pt-reason-in" type="text" placeholder="Entry reason..."></label>
             <button type="button" class="btn-buy" id="ptBuy">Buy</button>
             <button type="button" class="btn-sell" id="ptSell">Sell</button>
             <button type="button" class="btn" id="ptReset" title="Reset paper account to 100,000">Reset</button>
@@ -382,12 +422,22 @@ window.TradingPanel = (() => {
         <div class="tp-subtabs">
           <button type="button" data-pt="positions" class="${activePaperTab === "positions" ? "on" : ""}">Positions (${state.positions.length})</button>
           <button type="button" data-pt="history" class="${activePaperTab === "history" ? "on" : ""}">Trade History (${state.history.length})</button>
+          <div class="pt-lines" title="Show or hide Paper Trading lines on chart">
+            <span>Chart Lines:</span>
+            <label><input type="checkbox" id="ptLineEntry" ${lc.entry ? "checked" : ""}>Entry</label>
+            <label><input type="checkbox" id="ptLineSL" ${lc.sl ? "checked" : ""}>SL</label>
+            <label><input type="checkbox" id="ptLineTP" ${lc.tp ? "checked" : ""}>TP</label>
+          </div>
         </div>
         <div class="tp-scroll" id="ptTable"></div>
       `;
       body.querySelectorAll("[data-pt]").forEach((b) => { b.onclick = () => { activePaperTab = b.dataset.pt; render(); }; });
-      document.getElementById("ptBuy").onclick = () => placeOrder("long", document.getElementById("ptQty").value, document.getElementById("ptSL").value, document.getElementById("ptTP").value);
-      document.getElementById("ptSell").onclick = () => placeOrder("short", document.getElementById("ptQty").value, document.getElementById("ptSL").value, document.getElementById("ptTP").value);
+      [["ptLineEntry", "entry"], ["ptLineSL", "sl"], ["ptLineTP", "tp"]].forEach(([elId, key]) => {
+        const cb = document.getElementById(elId);
+        if (cb) cb.onchange = () => { state.lines = state.lines || { entry: true, sl: true, tp: true }; state.lines[key] = cb.checked; saveState(); syncLines(); };
+      });
+      document.getElementById("ptBuy").onclick = () => placeOrder("long", document.getElementById("ptQty").value, document.getElementById("ptSL").value, document.getElementById("ptTP").value, document.getElementById("ptReason").value);
+      document.getElementById("ptSell").onclick = () => placeOrder("short", document.getElementById("ptQty").value, document.getElementById("ptSL").value, document.getElementById("ptTP").value, document.getElementById("ptReason").value);
       document.getElementById("ptReset").onclick = resetAccount;
 
       const tbl = document.getElementById("ptTable");
@@ -395,43 +445,65 @@ window.TradingPanel = (() => {
         if (!state.positions.length) {
           tbl.innerHTML = `<div class="tp-empty">No open paper positions. Click Buy or Sell above to place a simulated trade on ${esc(sym)}.</div>`;
         } else {
-          tbl.innerHTML = `<table class="tp-tbl"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg Entry</th><th>LTP</th><th>SL</th><th>TP</th><th>Unrealized P&amp;L</th><th></th></tr></thead><tbody>${
+          tbl.innerHTML = `<table class="tp-tbl"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg Entry</th><th>LTP</th><th>SL</th><th>TP</th><th>Entry Reason</th><th>Unrealized P&amp;L</th><th></th></tr></thead><tbody>${
             state.positions.map((p) => {
               const u = calcUnrealized(p);
               const cl = prices[p.symbol];
               return `<tr>
-                <td><b>${esc(p.symbol)}</b></td>
+                <td><b class="pt-sym-link" data-open-sym="${esc(p.symbol)}" title="Open ${esc(p.symbol)} chart">${esc(p.symbol)}</b></td>
                 <td class="${p.side === "long" ? "pos" : "neg"}">${p.side.toUpperCase()}</td>
                 <td>${p.qty}</td>
                 <td>${fmtNum(p.entryPrice, p.entryPrice < 10 ? 4 : 2)}</td>
                 <td data-pt-ltp="${p.id}">${Number.isFinite(cl) ? fmtNum(cl, cl < 10 ? 4 : 2) : "-"}</td>
-                <td>${p.sl ? fmtNum(p.sl, 2) : "-"}</td>
-                <td>${p.tp ? fmtNum(p.tp, 2) : "-"}</td>
+                <td><input class="pt-lvl-in" type="number" step="any" placeholder="-" value="${p.sl ?? ""}" data-lvl-id="${p.id}" data-lvl-f="sl"></td>
+                <td><input class="pt-lvl-in" type="number" step="any" placeholder="-" value="${p.tp ?? ""}" data-lvl-id="${p.id}" data-lvl-f="tp"></td>
+                <td><input class="pt-reason-in" type="text" placeholder="Add entry reason..." value="${esc(p.entryReason || "")}" data-rs-list="positions" data-rs-id="${p.id}" data-rs-f="entryReason"></td>
                 <td data-pt-pnl="${p.id}" class="${u >= 0 ? "pos" : "neg"}">${fmtMoney(u, p.symbol)}</td>
                 <td><button type="button" class="btn" data-close-pos="${p.id}">Close</button></td>
               </tr>`;
             }).join("")
           }</tbody></table>`;
-          tbl.querySelectorAll("[data-close-pos]").forEach((b) => { b.onclick = () => closePosition(Number(b.dataset.closePos)); });
+          tbl.querySelectorAll("[data-close-pos]").forEach((b) => {
+            b.onclick = () => {
+              const id = Number(b.dataset.closePos);
+              const r = window.prompt("Exit reason (leave blank for Manual):", "");
+              if (r === null) return;
+              closePosition(id, undefined, r.trim() || "Manual");
+            };
+          });
+          tbl.querySelectorAll("[data-lvl-id]").forEach((inp) => {
+            inp.onchange = () => updateLevels(Number(inp.dataset.lvlId), inp.dataset.lvlF, inp.value);
+          });
         }
       } else {
         if (!state.history.length) {
           tbl.innerHTML = `<div class="tp-empty">No closed paper trades yet.</div>`;
         } else {
-          tbl.innerHTML = `<table class="tp-tbl"><thead><tr><th>Closed</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P&amp;L</th></tr></thead><tbody>${
+          tbl.innerHTML = `<table class="tp-tbl"><thead><tr><th>Closed</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry Reason</th><th>Exit Reason</th><th>P&amp;L</th></tr></thead><tbody>${
             state.history.map((h) => `<tr>
               <td>${fmtTime(h.closedAt)}</td>
-              <td><b>${esc(h.symbol)}</b></td>
+              <td><b class="pt-sym-link" data-open-sym="${esc(h.symbol)}" title="Open ${esc(h.symbol)} chart">${esc(h.symbol)}</b></td>
               <td class="${h.side === "long" ? "pos" : "neg"}">${h.side.toUpperCase()}</td>
               <td>${h.qty}</td>
               <td>${fmtNum(h.entryPrice, h.entryPrice < 10 ? 4 : 2)}</td>
               <td>${fmtNum(h.exitPrice, h.exitPrice < 10 ? 4 : 2)}</td>
-              <td>${esc(h.reason || "-")}</td>
+              <td><input class="pt-reason-in" type="text" placeholder="Entry reason..." value="${esc(h.entryReason || "")}" data-rs-list="history" data-rs-id="${h.id}" data-rs-f="entryReason"></td>
+              <td><input class="pt-reason-in" type="text" placeholder="Exit reason..." value="${esc(h.reason || "")}" data-rs-list="history" data-rs-id="${h.id}" data-rs-f="reason"></td>
               <td class="${h.pnl >= 0 ? "pos" : "neg"}">${fmtMoney(h.pnl, h.symbol)} (${h.pct >= 0 ? "+" : ""}${h.pct.toFixed(2)}%)</td>
             </tr>`).join("")
           }</tbody></table>`;
         }
       }
+      tbl.querySelectorAll("[data-open-sym]").forEach((el) => {
+        el.onclick = () => { if (window.openChartSymbol) window.openChartSymbol(el.dataset.openSym); };
+      });
+      tbl.querySelectorAll("[data-rs-list]").forEach((inp) => {
+        inp.onchange = () => {
+          const list = inp.dataset.rsList === "history" ? state.history : state.positions;
+          const item = list.find((x) => x.id === Number(inp.dataset.rsId));
+          if (item) { item[inp.dataset.rsF] = inp.value.trim(); saveState(); }
+        };
+      });
       return;
     }
 
@@ -528,5 +600,5 @@ window.TradingPanel = (() => {
     }
   }
 
-  return { onTick, onStrategyReport, onSymbolChange, placeOrder, open, close, toggle, render };
+  return { onTick, onStrategyReport, onSymbolChange, placeOrder, open, close, toggle, render, syncLines, updateLevels };
 })();

@@ -93,6 +93,7 @@ function makePrice() {
   drawings = new LD.DrawingManager(chart, price, { magnet: "weak" });
   if (saved) drawings.importJSON(saved);
   drawings.on("tool", markTools);
+  if (typeof lastPaperCfg !== "undefined" && lastPaperCfg) setPaperLines(lastPaperCfg);
 }
 
 // ---- indicators computed in the page (the library has none built in) ----
@@ -374,12 +375,61 @@ function renderPineLegend() {
   }
 }
 
+let paperPriceLines = [], lastPaperCfg = null, dragLine = null;
+function setPaperLines(cfg) {
+  lastPaperCfg = cfg || null;
+  if (!price) return;
+  paperPriceLines.forEach((x) => { try { price.removePriceLine(x.line); } catch (_) {} });
+  paperPriceLines = [];
+  if (!cfg || !Array.isArray(cfg.positions) || !cfg.positions.length) return;
+  const add = (posId, field, val, color, title) => {
+    const p = Number(val);
+    if (!Number.isFinite(p) || p <= 0) return;
+    const line = price.createPriceLine({
+      price: p, color, lineWidth: 2,
+      lineStyle: field === "entry" ? LC.LineStyle.Solid : LC.LineStyle.Dashed,
+      axisLabelVisible: true, title,
+    });
+    paperPriceLines.push({ line, posId, field, price: p });
+  };
+  cfg.positions.forEach((p) => {
+    if (cfg.showEntry) add(p.id, "entry", p.entryPrice, "#38bdf8", `${p.side === "long" ? "LONG" : "SHORT"}`);
+    if (cfg.showSL && p.sl) add(p.id, "sl", p.sl, "#f87171", "SL");
+    if (cfg.showTP && p.tp) add(p.id, "tp", p.tp, "#34d399", "TP");
+  });
+}
+host.addEventListener("mousedown", (e) => {
+  if (!price || !paperPriceLines.length) return;
+  const y = e.clientY - host.getBoundingClientRect().top;
+  const hit = paperPriceLines.find((x) => (x.field === "sl" || x.field === "tp") && Math.abs((price.priceToCoordinate(x.price) ?? -999) - y) <= 7);
+  if (!hit) return;
+  dragLine = hit;
+  chart.applyOptions({ handleScroll: false, handleScale: false });
+  e.preventDefault();
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragLine || !price) return;
+  const y = e.clientY - host.getBoundingClientRect().top;
+  const p = price.coordinateToPrice(y);
+  if (Number.isFinite(p) && p > 0) {
+    dragLine.price = p;
+    dragLine.line.applyOptions({ price: p });
+  }
+});
+window.addEventListener("mouseup", () => {
+  if (!dragLine) return;
+  const d = dragLine; dragLine = null;
+  chart.applyOptions({ handleScroll: true, handleScale: true });
+  if (LabEmbedded) window.parent.postMessage({ evt: "paper:update", posId: d.posId, field: d.field, price: d.price }, location.origin);
+});
+
 window.labChart = {
   name: "lightweight",
   applyTheme,
   setMarket: (s, t) => { sym = s; tf = t || tf; if (![...symSel.options].some((o) => o.value === s)) symSel.add(new Option(s, s)); symSel.value = s; markTF(); return load(); },
   setTF: (t) => { tf = t; markTF(); return load(); },
   addCodeTrendline,
+  setPaperLines,
   onChart: () => Array.from(pineHandles.values()).map((h) => ({ id: h.id, title: h.title, native: null, visible: true })),
   stylePine: (id, styleOpt) => {
     const h = pineHandles.get(id);
