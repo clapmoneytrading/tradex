@@ -242,28 +242,29 @@ function build(layout) {
   window.lastRuns = {};
   try { ws.chart.on("script:run", (ev) => { if (ev && ev.id) window.lastRuns[ev.id] = { plots: ev.plots || {}, bar: ev.bar, warnings: (ev.warnings || []).length, at: Date.now() }; }); } catch (_) {}
   try { ws.chart.on("indicator:removed", (ev) => { if (LabEmbedded && ev && ev.id) window.parent.postMessage({ evt: "ind:removed", id: ev.id }, location.origin); }); } catch (_) {}
-  try {
-    ws.chart.on("drawing:edited", (ev) => {
-      const id = ev && ev.id;
-      if (!id || !paperLines.has(id)) return;
-      const meta = paperLines.get(id);
-      const d = (ws.chart.drawings.list() || []).find((x) => x.id === id);
-      const np = d && d.anchors && d.anchors[0] ? Number(d.anchors[0].price) : NaN;
-      if (!Number.isFinite(np)) return;
-      if (meta.field === "entry") {
-        // Keep Entry line fixed at actual entry price
-        setPaperLines(lastPaperCfg);
-        return;
-      }
-      meta.price = np;
-      if (LabEmbedded) window.parent.postMessage({ evt: "paper:update", posId: meta.posId, field: meta.field, price: np }, location.origin);
-    });
-  } catch (_) {}
+  try { ws.chart.on("drawing:edited", checkPaperLinesChanged); } catch (_) {}
+  try { if (ws.chart.drawings.store && ws.chart.drawings.store.subscribe) ws.chart.drawings.store.subscribe(checkPaperLinesChanged); } catch (_) {}
   ws.chart.on("market:changed", ({ symbol, timeframe }) => LabNotify(String(symbol || "").replace(/^lab:/, ""), LabTF.fromAny(timeframe || "1")));
   if (lastPaperCfg) setTimeout(() => setPaperLines(lastPaperCfg), 500);
 }
 const paperLines = new Map();
 let lastPaperCfg = null;
+function checkPaperLinesChanged() {
+  if (!ws || !ws.chart || !ws.chart.drawings || !paperLines.size) return;
+  const list = ws.chart.drawings.list() || [];
+  for (const [id, meta] of paperLines.entries()) {
+    const d = list.find((x) => x.id === id);
+    const np = d && d.anchors && d.anchors[0] ? Number(d.anchors[0].price) : NaN;
+    if (!Number.isFinite(np) || Math.abs(np - meta.price) < 1e-9) continue;
+    if (meta.field === "entry") {
+      setPaperLines(lastPaperCfg);
+      return;
+    }
+    meta.price = np;
+    if (LabEmbedded) window.parent.postMessage({ evt: "paper:update", posId: meta.posId, field: meta.field, price: np }, location.origin);
+  }
+}
+window.addEventListener("pointerup", () => setTimeout(checkPaperLinesChanged, 40), true);
 function setPaperLines(cfg) {
   lastPaperCfg = cfg || null;
   if (!ws || !ws.chart || !ws.chart.drawings) return;
