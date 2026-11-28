@@ -1,0 +1,330 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TradeGen - NSE Stock Scanner</title>
+<link rel="icon" href="favicon.ico?v=2" type="image/x-icon">
+<script src="theme.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 var(--font); }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex: none; flex-wrap: wrap; }
+  .brand { font-weight: 700; color: var(--accent); letter-spacing: .02em; display: flex; align-items: center; gap: 6px; }
+  .brand img { width: 20px; height: 20px; border-radius: 4px; }
+  input, select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; font: inherit; font-size: 12px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .btn { background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--accentInk); border-color: var(--accent); font-weight: 600; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  main { flex: 1; overflow: auto; padding: 14px; }
+  .status { font-size: 12px; color: var(--dim); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; background: var(--raised); border: 1px solid var(--line); }
+  .rank-A { background: rgba(143,179,106,.18); color: var(--ok); border-color: var(--ok); }
+  .rank-B { background: rgba(227,163,58,.18); color: var(--accent); border-color: var(--accent); }
+  .rank-C { background: rgba(149,140,126,.18); color: var(--text); border-color: var(--dim); }
+  .rank-D { background: rgba(201,85,60,.18); color: var(--bad); border-color: var(--bad); }
+  .pos { color: var(--ok); }
+  .neg { color: var(--bad); }
+  .tier-green { color: #34d399; font-weight: 700; }
+  .tier-orange { color: #f59e0b; font-weight: 700; }
+  .tier-red { color: #f87171; font-weight: 700; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 4px; font-weight: 700; font-family: var(--mono); border: 1px solid transparent; }
+  .pill.tier-green { background: rgba(52,211,153,.15); border-color: rgba(52,211,153,.45); }
+  .pill.tier-orange { background: rgba(245,158,11,.15); border-color: rgba(245,158,11,.45); }
+  .pill.tier-red { background: rgba(248,113,113,.15); border-color: rgba(248,113,113,.45); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  th { text-align: left; padding: 7px 10px; background: var(--raised); color: var(--dim); border-bottom: 1px solid var(--line); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  td { padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  tr:hover td { background: rgba(255,255,255,.03); }
+  .clickable { cursor: pointer; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .empty { padding: 30px; text-align: center; color: var(--dim); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  @media print {
+    header, .toolbar, .no-print { display: none !important; }
+    body, main { overflow: visible; height: auto; background: #fff; color: #000; }
+    table { border-color: #ccc; background: #fff; color: #000; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><img src="logo.png" alt="TZ">TradeGen NSE Scanner</span>
+  <span style="font-size:12px;color:var(--dim)">Stored stocks: <b id="scanCount">0</b></span>
+  <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+    <button type="button" class="btn primary" data-scan="50" id="btnScan50">Scan Top 50 NSE</button>
+    <button type="button" class="btn" data-scan="100" id="btnScan100">Scan Top 100</button>
+    <button type="button" class="btn" data-scan="200" id="btnScan200">Scan Top 200</button>
+    <button type="button" class="btn" id="btnStopScan" hidden>Stop</button>
+  </span>
+</header>
+<main id="main"></main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let allRecords = [];
+let sortKey = "updated_at";
+let sortDir = -1;
+let filterText = "";
+let filterSector = "";
+let filterRank = "";
+let filterDemand = "";
+let filterMinEps = "";
+let filterMinRs = "";
+let filterMinRoe = "";
+let filterMaxPe = "";
+let scanPoll = null;
+let scanState = { running: false, total: 0, done: 0, ok: 0, errors: 0, current: "" };
+
+function chgClass(v) {
+  const n = parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n > 0 ? "pos" : "neg";
+}
+function scoreTier(v, greenMin = 80, orangeMin = 60) {
+  const n = parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+  if (!Number.isFinite(n)) return "";
+  return n >= greenMin ? "tier-green" : n >= orangeMin ? "tier-orange" : "tier-red";
+}
+function demandTier(v) {
+  const s = String(v || "").trim().toUpperCase();
+  if (!s) return "";
+  if (["A+", "A", "A-", "B+", "B"].includes(s)) return "tier-green";
+  if (["B-", "C+", "C"].includes(s)) return "tier-orange";
+  return "tier-red";
+}
+
+async function refreshList(doRender = true) {
+  try {
+    const r = await fetch("/api/fundamentals/list?store=scanner");
+    const j = await r.json();
+    allRecords = Array.isArray(j.records) ? j.records : [];
+    $("scanCount").textContent = String(allRecords.length);
+  } catch (_) {}
+  if (doRender) render();
+}
+
+function updateScanButtons() {
+  ["btnScan50", "btnScan100", "btnScan200"].forEach((id) => { if ($(id)) $(id).disabled = !!scanState.running; });
+  if ($("btnStopScan")) $("btnStopScan").hidden = !scanState.running;
+}
+
+function render() {
+  updateScanButtons();
+  const m = $("main");
+  const minEps = parseFloat(filterMinEps);
+  const minRs = parseFloat(filterMinRs);
+  const minRoe = parseFloat(filterMinRoe);
+  const maxPe = parseFloat(filterMaxPe);
+  const q = filterText.trim().toLowerCase();
+  const sectors = [...new Set(allRecords.map((r) => r.sector).filter(Boolean))].sort();
+  const filtered = allRecords.filter((r) => {
+    if (q && !(String(r.symbol || "").toLowerCase().includes(q) || String(r.stock_name || "").toLowerCase().includes(q) || String(r.sector || "").toLowerCase().includes(q))) return false;
+    if (filterSector && r.sector !== filterSector) return false;
+    if (filterRank && r.master_rank !== filterRank) return false;
+    if (filterDemand && demandTier(r.buyer_demand) !== filterDemand) return false;
+    if (Number.isFinite(minEps) && (parseFloat(r.eps_rating) || 0) < minEps) return false;
+    if (Number.isFinite(minRs) && (parseFloat(r.rs_rating) || 0) < minRs) return false;
+    if (Number.isFinite(minRoe) && (parseFloat(String(r.return_on_equity || "").replace(/[^0-9.\-]/g, "")) || 0) < minRoe) return false;
+    if (Number.isFinite(maxPe)) {
+      const pe = parseFloat(r.pe_ratio);
+      if (!Number.isFinite(pe) || pe <= 0 || pe > maxPe) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    const va = a[sortKey], vb = b[sortKey];
+    const na = parseFloat(String(va ?? "").replace(/[^0-9.\-]/g, ""));
+    const nb = parseFloat(String(vb ?? "").replace(/[^0-9.\-]/g, ""));
+    if (Number.isFinite(na) && Number.isFinite(nb) && sortKey !== "updated_at") return (na - nb) * sortDir;
+    return String(va || "").localeCompare(String(vb || "")) * sortDir;
+  });
+
+  m.innerHTML = `
+    <div class="toolbar">
+      <button type="button" class="btn" data-preset="all">All</button>
+      <button type="button" class="btn" data-preset="eps80">EPS 80+</button>
+      <button type="button" class="btn" data-preset="rs80">RS 80+</button>
+      <button type="button" class="btn" data-preset="canslim">CAN SLIM (EPS 80+ &amp; RS 80+ &amp; Demand A/B)</button>
+      <button type="button" class="btn" data-preset="roe17">ROE 17%+</button>
+      <button type="button" class="btn" data-preset="rankA">Rank A</button>
+    </div>
+    <div class="toolbar">
+      <input id="fText" placeholder="Symbol / Company / Sector" value="${esc(filterText)}" style="width:170px">
+      <select id="fSector"><option value="">All Sectors</option>${sectors.map((s) => `<option value="${esc(s)}" ${filterSector === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+      <select id="fRank">
+        <option value="">All Ranks</option>
+        <option value="A" ${filterRank === "A" ? "selected" : ""}>Rank A</option>
+        <option value="B" ${filterRank === "B" ? "selected" : ""}>Rank B</option>
+        <option value="C" ${filterRank === "C" ? "selected" : ""}>Rank C</option>
+        <option value="D" ${filterRank === "D" ? "selected" : ""}>Rank D</option>
+      </select>
+      <select id="fDemand">
+        <option value="">All Demand</option>
+        <option value="tier-green" ${filterDemand === "tier-green" ? "selected" : ""}>Strong (A+..B)</option>
+        <option value="tier-orange" ${filterDemand === "tier-orange" ? "selected" : ""}>Neutral (B-..C)</option>
+        <option value="tier-red" ${filterDemand === "tier-red" ? "selected" : ""}>Weak (C-..E)</option>
+      </select>
+      <input id="fEps" type="number" placeholder="Min EPS" style="width:80px" value="${esc(filterMinEps)}">
+      <input id="fRs" type="number" placeholder="Min RS" style="width:76px" value="${esc(filterMinRs)}">
+      <input id="fRoe" type="number" placeholder="Min ROE%" style="width:82px" value="${esc(filterMinRoe)}">
+      <input id="fPe" type="number" placeholder="Max P/E" style="width:76px" value="${esc(filterMaxPe)}">
+      <button type="button" class="btn primary" id="btnCsvFiltered">Export Filtered CSV</button>
+      <button type="button" class="btn" id="btnCsv">Export All CSV</button>
+      <button type="button" class="btn" id="btnPrint">Print / PDF</button>
+      <button type="button" class="btn" id="btnRefreshAll">Refresh All (${allRecords.length})</button>
+    </div>
+    <div class="status">
+      <span>Showing <b>${filtered.length}</b> of ${allRecords.length} scanned NSE stocks</span>
+      <span id="refStatus">${scanState.running ? `Scanning ${scanState.done}/${scanState.total} (${scanState.current})...` : (scanState.total ? `Last scan: ${scanState.ok}/${scanState.total} saved` : "")}</span>
+    </div>
+    ${filtered.length ? `<table><thead><tr>
+      <th data-s="symbol">Symbol</th><th data-s="stock_name">Company</th><th data-s="sector">Sector</th><th data-s="current_price">Price</th>
+      <th data-s="master_rank">Rank</th><th data-s="master_score">Score</th><th data-s="eps_rating">EPS</th>
+      <th data-s="rs_rating">RS</th><th data-s="buyer_demand">Buyer Demand</th><th data-s="pe_ratio">P/E</th><th data-s="return_on_equity">ROE</th>
+      <th data-s="sales_change_percent">Sales %</th><th data-s="no_of_funds">Funds</th><th class="no-print">Actions</th>
+    </tr></thead><tbody>${
+      filtered.map((r) => `<tr class="clickable" data-open="${esc(r.symbol)}">
+        <td><b>${esc(r.symbol)}</b></td>
+        <td>${esc(r.stock_name || "-")}</td>
+        <td>${esc(r.sector || "-")}</td>
+        <td>₹${esc(r.current_price || "-")} <small class="${chgClass(r.change)}">${esc(r.change || "")}</small></td>
+        <td>${r.master_rank ? `<span class="badge rank-${esc(r.master_rank)}">${esc(r.master_rank)}</span>` : "-"}</td>
+        <td class="${scoreTier(r.master_score, 80, 60)}">${esc(r.master_score || "-")}</td>
+        <td class="${scoreTier(r.eps_rating, 80, 60)}">${esc(r.eps_rating || "-")}</td>
+        <td class="${scoreTier(r.rs_rating, 80, 60)}">${esc(r.rs_rating || "-")}</td>
+        <td><span class="pill ${demandTier(r.buyer_demand)}">${esc(r.buyer_demand || "-")}</span></td>
+        <td>${esc(r.pe_ratio || "-")}</td>
+        <td class="${scoreTier(r.return_on_equity, 17, 10)}">${esc(r.return_on_equity || "-")}</td>
+        <td class="${chgClass(r.sales_change_percent)}">${esc(r.sales_change_percent || "-")}</td>
+        <td>${esc(r.no_of_funds || "-")}</td>
+        <td class="no-print" style="display:flex;gap:4px">
+          <button type="button" class="btn" data-fav="${esc(r.symbol)}" title="Save to Fundamental Favorites">★</button>
+          <button type="button" class="btn" data-del="${esc(r.symbol)}" title="Remove from Scanner">×</button>
+        </td>
+      </tr>`).join("")
+    }</tbody></table>` : `<div class="empty">No scanned NSE stocks yet. Click <b>Scan Top 50 NSE</b> above to populate your scanner.</div>`}
+  `;
+
+  m.querySelectorAll("[data-preset]").forEach((b) => {
+    b.onclick = () => {
+      const p = b.dataset.preset;
+      filterText = ""; filterSector = ""; filterRank = ""; filterDemand = ""; filterMinEps = ""; filterMinRs = ""; filterMinRoe = ""; filterMaxPe = "";
+      if (p === "eps80") { filterMinEps = "80"; sortKey = "eps_rating"; sortDir = -1; }
+      else if (p === "rs80") { filterMinRs = "80"; sortKey = "rs_rating"; sortDir = -1; }
+      else if (p === "canslim") { filterMinEps = "80"; filterMinRs = "80"; filterDemand = "tier-green"; sortKey = "master_score"; sortDir = -1; }
+      else if (p === "roe17") { filterMinRoe = "17"; sortKey = "return_on_equity"; sortDir = -1; }
+      else if (p === "rankA") { filterRank = "A"; sortKey = "master_score"; sortDir = -1; }
+      render();
+    };
+  });
+  $("fText").oninput = (e) => { filterText = e.target.value; render(); $("fText").focus(); };
+  $("fSector").onchange = (e) => { filterSector = e.target.value; render(); };
+  $("fRank").onchange = (e) => { filterRank = e.target.value; render(); };
+  $("fDemand").onchange = (e) => { filterDemand = e.target.value; render(); };
+  $("fEps").oninput = (e) => { filterMinEps = e.target.value; render(); $("fEps").focus(); };
+  $("fRs").oninput = (e) => { filterMinRs = e.target.value; render(); $("fRs").focus(); };
+  $("fRoe").oninput = (e) => { filterMinRoe = e.target.value; render(); $("fRoe").focus(); };
+  $("fPe").oninput = (e) => { filterMaxPe = e.target.value; render(); $("fPe").focus(); };
+  $("btnCsvFiltered").onclick = () => {
+    const cols = ["symbol", "stock_name", "sector", "industry_group_rank", "current_price", "change", "master_rank", "master_score", "eps_rating", "rs_rating", "buyer_demand", "pe_ratio", "return_on_equity", "sales_change_percent", "no_of_funds"];
+    const csv = [cols.join(",")].concat(filtered.map((r) => cols.map((c) => `"${String(r[c] ?? "").replace(/"/g, '""')}"`).join(","))).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    a.download = `nse-scanner-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  };
+  $("btnCsv").onclick = () => { location.href = "/api/fundamentals/export?store=scanner"; };
+  $("btnPrint").onclick = () => { window.print(); };
+  $("btnRefreshAll").onclick = async () => {
+    $("btnRefreshAll").disabled = true;
+    $("refStatus").textContent = "Updating all scanned stocks...";
+    try {
+      const r = await fetch("/api/fundamentals/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ store: "scanner" }) });
+      const j = await r.json();
+      await refreshList(false);
+      $("refStatus").textContent = `Updated ${j.updated}/${j.total} stocks`;
+      render();
+    } catch (e) {
+      $("refStatus").textContent = "Refresh failed: " + (e.message || e);
+    }
+  };
+  m.querySelectorAll("th[data-s]").forEach((th) => {
+    th.onclick = () => {
+      const k = th.dataset.s;
+      if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = -1; }
+      render();
+    };
+  });
+  m.querySelectorAll("tr[data-open]").forEach((tr) => {
+    tr.onclick = (e) => {
+      if (e.target.closest("[data-del]") || e.target.closest("[data-fav]")) return;
+      const sym = tr.dataset.open;
+      if (window.opener && !window.opener.closed && window.opener.openChartSymbol) {
+        window.opener.openChartSymbol(`NSE:${sym}-EQ`);
+        window.opener.focus();
+      } else {
+        window.open(`fundamentals.html?symbol=${encodeURIComponent(sym)}`, "tradegen_fundamentals", "width=940,height=680,resizable=yes,scrollbars=yes");
+      }
+    };
+  });
+  m.querySelectorAll("[data-fav]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      b.disabled = true;
+      await fetch(`/api/fundamentals?symbol=${encodeURIComponent(b.dataset.fav)}&store=favorites`);
+      b.textContent = "✓";
+    };
+  });
+  m.querySelectorAll("[data-del]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      await fetch("/api/fundamentals/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: b.dataset.del, store: "scanner" }),
+      });
+      await refreshList(true);
+    };
+  });
+}
+
+document.querySelectorAll("[data-scan]").forEach((b) => {
+  b.onclick = async () => {
+    const limit = Number(b.dataset.scan) || 50;
+    const r = await fetch("/api/fundamentals/scan/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit }) });
+    scanState = await r.json();
+    startScanPoll();
+    render();
+  };
+});
+$("btnStopScan").onclick = async () => {
+  const r = await fetch("/api/fundamentals/scan/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  scanState = await r.json();
+  render();
+};
+
+function startScanPoll() {
+  if (scanPoll) return;
+  scanPoll = setInterval(async () => {
+    try {
+      const r = await fetch("/api/fundamentals/scan/status");
+      scanState = await r.json();
+      await refreshList(true);
+      if (!scanState.running) {
+        clearInterval(scanPoll);
+        scanPoll = null;
+        render();
+      }
+    } catch (_) {}
+  }, 1500);
+}
+
+fetch("/api/fundamentals/scan/status").then((r) => r.json()).then((s) => {
+  scanState = s || scanState;
+  if (scanState.running) startScanPoll();
+  refreshList(true);
+}).catch(() => refreshList(true));
+</script>
+</body>
+</html>

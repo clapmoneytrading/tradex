@@ -1090,12 +1090,15 @@ class LabHandler(SimpleHTTPRequestHandler):
             return self._json(fundamentals.scan_status(), 200)
         if self.path.startswith("/api/fundamentals/list"):
             import fundamentals
-            return self._json({"records": fundamentals.list_all()}, 200)
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            return self._json({"records": fundamentals.list_all(q.get("store") or "favorites")}, 200)
         if self.path.startswith("/api/fundamentals/export"):
             import fundamentals
             from datetime import datetime, timezone
-            csv_bytes = fundamentals.export_csv()
-            fname = f"fundamentals-report-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv"
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            store = q.get("store") or "favorites"
+            csv_bytes = fundamentals.export_csv(store)
+            fname = f"{store}-report-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv"
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
@@ -1107,10 +1110,11 @@ class LabHandler(SimpleHTTPRequestHandler):
             import fundamentals
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             sym = (q.get("symbol") or "").strip()
+            store = q.get("store") or "favorites"
             if not sym:
                 return self._json({"error": "symbol is required"}, 400)
             try:
-                rec, total, existed, stale, err = fundamentals.lookup_and_save(sym)
+                rec, total, existed, stale, err = fundamentals.lookup_and_save(sym, store=store)
                 return self._json({"record": rec, "total": total, "existed": existed, "stale": stale, "error": err}, 200)
             except Exception as e:
                 return self._json({"error": str(e)}, 502)
@@ -1240,14 +1244,15 @@ class LabHandler(SimpleHTTPRequestHandler):
             return self._json(fundamentals.stop_scan(), 200)
         if self.path.startswith("/api/fundamentals/refresh"):
             import fundamentals
+            body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             try:
-                return self._json(fundamentals.refresh_all(), 200)
+                return self._json(fundamentals.refresh_all(body.get("store") or "favorites"), 200)
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
         if self.path.startswith("/api/fundamentals/delete"):
             import fundamentals
             body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
-            removed, total = fundamentals.delete_symbol(body.get("symbol") or "")
+            removed, total = fundamentals.delete_symbol(body.get("symbol") or "", body.get("store") or "favorites")
             return self._json({"ok": removed, "total": total}, 200)
         if self.path.startswith("/api/fyers/config"):
             body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")

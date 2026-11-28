@@ -274,7 +274,8 @@ function setPaperLines(cfg) {
   const addLvl = (posId, field, price, color, label) => {
     if (!Number.isFinite(Number(price)) || Number(price) <= 0) return;
     try {
-      const id = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: Number(price) }], style: { color, lineWidth: 2, lineStyle: field === "entry" ? "solid" : "dashed" }, text: label });
+      const d = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: Number(price) }], style: { lineColor: color, lineWidth: 2, lineStyle: field === "entry" ? "solid" : "dashed" }, text: label });
+      const id = d && (d.id || d);
       if (id) paperLines.set(id, { posId, field, price: Number(price) });
     } catch (_) {}
   };
@@ -324,7 +325,8 @@ function toggleAutoSR() {
   const anchorTime = b[n - 1].time;
   [...res, ...sup].forEach((c) => {
     try {
-      const id = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: c.avg }] });
+      const d = ws.chart.drawings.add("hline", { paneId: "price", anchors: [{ time: anchorTime, price: c.avg }] });
+      const id = d && (d.id || d);
       if (id) srIds.push(id);
     } catch (_) {}
   });

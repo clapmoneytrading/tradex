@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STORE_PATH = os.path.join(HERE, ".cache", "fundamentals.json")
+SCANNER_PATH = os.path.join(HERE, ".cache", "scanner.json")
+
+def _store_path(store="favorites"):
+    return SCANNER_PATH if store == "scanner" else STORE_PATH
 
 BASE_URL = "https://marketsmithindia.com"
 API_BASE = f"{BASE_URL}/gateway/simple-api/ms-india"
@@ -226,9 +230,10 @@ def fetch_stock(raw_symbol):
     }
 
 
-def _load_store():
+def _load_store(store="favorites"):
+    path = _store_path(store)
     try:
-        with open(STORE_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and isinstance(data.get("stocks"), dict):
             return data["stocks"]
@@ -237,73 +242,74 @@ def _load_store():
     return {}
 
 
-def _save_store(stocks):
-    os.makedirs(os.path.dirname(STORE_PATH), exist_ok=True)
-    tmp = f"{STORE_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
+def _save_store(stocks, store="favorites"):
+    path = _store_path(store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"version": 1, "stocks": stocks}, f, indent=2)
-    os.replace(tmp, STORE_PATH)
+    os.replace(tmp, path)
 
 
-def lookup_and_save(raw_symbol):
-    """Fetch fresh details for raw_symbol and save/update it in hub/.cache/fundamentals.json."""
+def lookup_and_save(raw_symbol, store="favorites"):
+    """Fetch fresh details for raw_symbol and save/update it in local store."""
     sym = normalize_symbol(raw_symbol)
     try:
         rec = fetch_stock(sym)
         stale = False
     except Exception as e:
         with _lock:
-            stocks = _load_store()
+            stocks = _load_store(store)
             existing = stocks.get(sym)
         if existing:
             return existing, len(stocks), False, True, str(e)
         raise
 
     with _lock:
-        stocks = _load_store()
+        stocks = _load_store(store)
         existed = rec["symbol"] in stocks
         stocks[rec["symbol"]] = rec
-        _save_store(stocks)
+        _save_store(stocks, store)
         total = len(stocks)
     return rec, total, existed, stale, None
 
 
-def list_all():
+def list_all(store="favorites"):
     with _lock:
-        stocks = _load_store()
+        stocks = _load_store(store)
     rows = list(stocks.values())
     rows.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
     return rows
 
 
-def delete_symbol(raw_symbol):
+def delete_symbol(raw_symbol, store="favorites"):
     sym = normalize_symbol(raw_symbol)
     with _lock:
-        stocks = _load_store()
+        stocks = _load_store(store)
         removed = stocks.pop(sym, None) is not None
         if removed:
-            _save_store(stocks)
+            _save_store(stocks, store)
         total = len(stocks)
     return removed, total
 
 
-def refresh_all():
-    rows = list_all()
+def refresh_all(store="favorites"):
+    rows = list_all(store)
     ok, errs = 0, []
     for r in rows:
         sym = r.get("symbol") or r.get("stock_name")
         if not sym:
             continue
         try:
-            lookup_and_save(sym)
+            lookup_and_save(sym, store=store)
             ok += 1
         except Exception as e:
             errs.append({"symbol": sym, "error": str(e)})
     return {"total": len(rows), "updated": ok, "errors": errs}
 
 
-def export_csv():
-    rows = list_all()
+def export_csv(store="favorites"):
+    rows = list_all(store)
     cols = [
         "symbol", "stock_name", "sector", "industry_group_rank", "current_price", "change",
         "master_rank", "master_score", "eps_rating", "rs_rating", "buyer_demand",
@@ -358,7 +364,7 @@ def start_scan(limit=50, symbols=None):
                     with _scan_lock:
                         if _scan_state["stop"]:
                             break
-                    futs[pool.submit(lookup_and_save, sym)] = sym
+                    futs[pool.submit(lookup_and_save, sym, "scanner")] = sym
                 for fut in as_completed(futs):
                     sym = futs[fut]
                     ok_inc, err_inc = 0, 0

@@ -427,7 +427,7 @@ async function init() {
     }
   };
   $("btnScan").onclick = () => {
-    const url = "fundamentals.html?view=report";
+    const url = "scanner.html";
     if (scanWin && !scanWin.closed) scanWin.focus();
     else scanWin = window.open(url, "tradegen_scanner", "width=1320,height=840,resizable=yes,scrollbars=yes");
   };

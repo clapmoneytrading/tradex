@@ -253,12 +253,6 @@ function render() {
       <button type="button" class="btn" data-preset="canslim">CAN SLIM (EPS 80+ &amp; RS 80+ &amp; Demand A/B)</button>
       <button type="button" class="btn" data-preset="roe17">ROE 17%+</button>
       <button type="button" class="btn" data-preset="rankA">Rank A</button>
-      <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
-        <button type="button" class="btn primary" data-scan="50" ${scanState.running ? "disabled" : ""}>Scan Top 50 NSE</button>
-        <button type="button" class="btn" data-scan="100" ${scanState.running ? "disabled" : ""}>Scan Top 100</button>
-        <button type="button" class="btn" data-scan="200" ${scanState.running ? "disabled" : ""}>Scan Top 200</button>
-        ${scanState.running ? `<button type="button" class="btn" id="btnStopScan">Stop</button>` : ""}
-      </span>
     </div>
     <div class="toolbar">
       <input id="fText" placeholder="Symbol / Company / Sector" value="${esc(filterText)}" style="width:170px">
@@ -286,8 +280,8 @@ function render() {
       <button type="button" class="btn" id="btnRefreshAll">Refresh All (${allRecords.length})</button>
     </div>
     <div class="status">
-      <span>Showing <b>${filtered.length}</b> of ${allRecords.length} stored NSE stocks</span>
-      <span id="refStatus">${scanState.running ? `Scanning ${scanState.done}/${scanState.total} (${scanState.current})...` : (scanState.total ? `Last scan: ${scanState.ok}/${scanState.total} saved` : "")}</span>
+      <span>Showing <b>${filtered.length}</b> of ${allRecords.length} saved favorite stocks</span>
+      <span id="refStatus"></span>
     </div>
     ${filtered.length ? `<table><thead><tr>
       <th data-s="symbol">Symbol</th><th data-s="stock_name">Company</th><th data-s="sector">Sector</th><th data-s="current_price">Price</th>
@@ -311,7 +305,7 @@ function render() {
         <td>${esc(r.no_of_funds || "-")}</td>
         <td class="no-print"><button type="button" class="btn" data-del="${esc(r.symbol)}" title="Remove">×</button></td>
       </tr>`).join("")
-    }</tbody></table>` : `<div class="empty">No stored NSE stocks match your filter. Click <b>Scan Top 50 NSE</b> above to populate your scanner.</div>`}
+    }</tbody></table>` : `<div class="empty">No saved favorite stocks match your filter. Fetch a stock in <b>Stock Details</b> to add it here.</div>`}
   `;
 
   m.querySelectorAll("[data-preset]").forEach((b) => {
@@ -326,20 +320,6 @@ function render() {
       render();
     };
   });
-  m.querySelectorAll("[data-scan]").forEach((b) => {
-    b.onclick = async () => {
-      const limit = Number(b.dataset.scan) || 50;
-      const r = await fetch("/api/fundamentals/scan/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit }) });
-      scanState = await r.json();
-      startScanPoll();
-      render();
-    };
-  });
-  if ($("btnStopScan")) $("btnStopScan").onclick = async () => {
-    const r = await fetch("/api/fundamentals/scan/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    scanState = await r.json();
-    render();
-  };
   $("fText").oninput = (e) => { filterText = e.target.value; render(); $("fText").focus(); };
   $("fSector").onchange = (e) => { filterSector = e.target.value; render(); };
   $("fRank").onchange = (e) => { filterRank = e.target.value; render(); };
